@@ -75,9 +75,4 @@ final class Tokenizer: Sendable {
         return ids
     }
 
-    /// Pad token IDs to a fixed length.
-    func pad(_ ids: [Int], to length: Int) -> [Int] {
-        if ids.count >= length { return Array(ids.prefix(length)) }
-        return ids + [Int](repeating: Self.padId, count: length - ids.count)
-    }
 }

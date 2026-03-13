@@ -27,11 +27,11 @@ enum MLArrayHelpers {
         let dim = VoiceStore.styleDim
         let ptr = array.dataPointer.assumingMemoryBound(to: Float.self)
         let n = min(styleVector.count, dim)
-        for i in 0..<n {
-            ptr[i] = styleVector[i]
+        styleVector.withUnsafeBufferPointer { src in
+            ptr.update(from: src.baseAddress!, count: n)
         }
-        for i in n..<dim {
-            ptr[i] = 0
+        if n < dim {
+            ptr.advanced(by: n).initialize(repeating: 0, count: dim - n)
         }
     }
 

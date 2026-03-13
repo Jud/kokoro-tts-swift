@@ -25,24 +25,7 @@ struct TokenizerTests {
         #expect(withEmoji == without)
     }
 
-    @Test("Padding extends to target length")
-    func padding() throws {
-        let tok = try makeTokenizer()
-        let ids = tok.encode("a")
-        let padded = tok.pad(ids, to: 20)
-        #expect(padded.count == 20)
-        #expect(padded.last == Tokenizer.padId)
-    }
-
-    @Test("Padding truncates if too long")
-    func paddingTruncates() throws {
-        let tok = try makeTokenizer()
-        let ids = Array(0..<50)
-        let padded = tok.pad(ids, to: 10)
-        #expect(padded.count == 10)
-    }
-
-    @Test("Max length enforced")
+@Test("Max length enforced")
     func maxLength() throws {
         let tok = try makeTokenizer()
         let longIPA = String(repeating: "a", count: 1000)

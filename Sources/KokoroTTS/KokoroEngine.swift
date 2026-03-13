@@ -86,6 +86,7 @@ public final class KokoroEngine: @unchecked Sendable {
         let refS: MLMultiArray
         let randomPhases: MLMultiArray
         let speed: MLMultiArray
+        let hasSpeed: Bool
     }
 
     private static let logger = Logger(
@@ -137,10 +138,10 @@ public final class KokoroEngine: @unchecked Sendable {
             let url = modelDirectory.appendingPathComponent(bucket.modelName + ".mlmodelc")
             guard FileManager.default.fileExists(atPath: url.path) else { continue }
             do {
-                let model = try MLModel(contentsOf: url, configuration: config)
                 let maxTokens = bucket.maxTokens
+                let modelObj = try MLModel(contentsOf: url, configuration: config)
                 let res = BucketResources(
-                    model: model,
+                    model: modelObj,
                     inputIds: try MLMultiArray(
                         shape: [1, maxTokens as NSNumber], dataType: .int32),
                     mask: try MLMultiArray(
@@ -149,7 +150,8 @@ public final class KokoroEngine: @unchecked Sendable {
                         shape: [1, VoiceStore.styleDim as NSNumber], dataType: .float32),
                     randomPhases: try MLMultiArray(
                         shape: [1, Self.numPhases as NSNumber], dataType: .float32),
-                    speed: try MLMultiArray(shape: [1], dataType: .float32)
+                    speed: try MLMultiArray(shape: [1], dataType: .float32),
+                    hasSpeed: modelObj.modelDescription.inputDescriptionsByName[Feature.speed] != nil
                 )
                 resources[bucket] = res
                 Self.logger.info("Loaded \(bucket.modelName) (\(maxTokens) tokens)")
@@ -389,8 +391,7 @@ public final class KokoroEngine: @unchecked Sendable {
             Feature.refS: MLFeatureValue(multiArray: res.refS),
             Feature.randomPhases: MLFeatureValue(multiArray: res.randomPhases),
         ]
-        let hasSpeed = res.model.modelDescription.inputDescriptionsByName[Feature.speed] != nil
-        if hasSpeed {
+        if res.hasSpeed {
             dict[Feature.speed] = MLFeatureValue(multiArray: res.speed)
         }
         let input = try MLDictionaryFeatureProvider(dictionary: dict)
@@ -439,13 +440,20 @@ public final class KokoroEngine: @unchecked Sendable {
     /// Apply fade-in and fade-out to suppress transients.
     private func applyFades(_ samples: inout [Float]) {
         guard samples.count > 0 else { return }
-        // Fade-in: 5ms to suppress onset transient.
-        let fadeIn = min(120, samples.count)
-        for i in 0..<fadeIn { samples[i] *= Float(i) / Float(fadeIn) }
-        // Fade-out: 50ms for natural ending.
-        let fadeOut = min(1200, samples.count)
-        let fadeStart = samples.count - fadeOut
-        for i in 0..<fadeOut { samples[fadeStart + i] *= Float(fadeOut - i) / Float(fadeOut) }
+        samples.withUnsafeMutableBufferPointer { buf in
+            let ptr = buf.baseAddress!
+            // Fade-in: 5ms ramp 0→1 to suppress onset transient.
+            let fadeIn = min(120, buf.count)
+            var startVal: Float = 0
+            var endVal: Float = 1.0
+            vDSP_vrampmul(ptr, 1, &startVal, &endVal, ptr, 1, vDSP_Length(fadeIn))
+            // Fade-out: 50ms ramp 1→0 for natural ending.
+            let fadeOut = min(1200, buf.count)
+            let fadeStart = buf.count - fadeOut
+            startVal = 1.0
+            endVal = 0
+            vDSP_vrampmul(ptr + fadeStart, 1, &startVal, &endVal, ptr + fadeStart, 1, vDSP_Length(fadeOut))
+        }
     }
 
     // Precomputed biquad coefficients for presence boost EQ.

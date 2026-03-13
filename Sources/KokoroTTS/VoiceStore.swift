@@ -44,22 +44,21 @@ final class VoiceStore: Sendable {
     /// Matches the reference: `ref_s = pack[len(ps)-1]`. Falls back to the
     /// nearest available length, then the generic embedding.
     func embedding(for voice: String, tokenCount: Int) throws -> [Float] {
-        guard let pack = voicePacks[voice] else {
-            let available = sortedVoiceNames.prefix(5).joined(separator: ", ")
-            throw KokoroError.voiceNotFound(
-                "\(voice) — available: \(available)...")
-        }
-        return pack.embedding(forTokenCount: tokenCount)
+        try pack(for: voice).embedding(forTokenCount: tokenCount)
     }
 
     /// Get the generic embedding (for warmup or when token count is unknown).
     func embedding(for voice: String) throws -> [Float] {
+        try pack(for: voice).generic
+    }
+
+    private func pack(for voice: String) throws -> VoicePack {
         guard let pack = voicePacks[voice] else {
             let available = sortedVoiceNames.prefix(5).joined(separator: ", ")
             throw KokoroError.voiceNotFound(
                 "\(voice) — available: \(available)...")
         }
-        return pack.generic
+        return pack
     }
 
     /// Available voice preset names.
@@ -81,13 +80,16 @@ final class VoiceStore: Sendable {
         let genericFloat = generic.prefix(styleDim).map { Float($0) }
 
         // Load length-indexed embeddings ("1", "2", ..., "510").
-        var indexed = [Int: [Float]]()
+        // Find max key first, then build a flat array for O(1) lookup.
+        var entries = [(Int, [Float])]()
         for (key, value) in json {
             guard let idx = Int(key), let arr = value as? [Double], arr.count >= styleDim else {
                 continue
             }
-            indexed[idx] = arr.prefix(styleDim).map { Float($0) }
+            entries.append((idx, arr.prefix(styleDim).map { Float($0) }))
         }
+        var indexed = [[Float]?](repeating: nil, count: (entries.map(\.0).max() ?? -1) + 1)
+        for (idx, vec) in entries { indexed[idx] = vec }
 
         return VoicePack(generic: genericFloat, indexed: indexed)
     }
@@ -96,8 +98,16 @@ final class VoiceStore: Sendable {
 /// A voice's complete set of style embeddings indexed by token length.
 struct VoicePack: Sendable {
     let generic: [Float]
-    /// Token length → 256-dim style vector. Key = tokenCount - 1 (matching reference).
-    let indexed: [Int: [Float]]
+    /// Length-indexed style vectors. Index = token length key, nil = no embedding at that length.
+    private let indexed: [[Float]?]
+    /// Highest valid index in `indexed`.
+    private let maxIndex: Int
+
+    init(generic: [Float], indexed: [[Float]?]) {
+        self.generic = generic
+        self.indexed = indexed
+        self.maxIndex = indexed.count - 1
+    }
 
     /// Select the best embedding for a given token count.
     ///
@@ -106,13 +116,18 @@ struct VoicePack: Sendable {
     func embedding(forTokenCount count: Int) -> [Float] {
         let key = max(0, count - 1)
 
-        // Exact match.
-        if let emb = indexed[key] { return emb }
+        // O(1) exact match.
+        if key <= maxIndex, let emb = indexed[key] { return emb }
 
-        // Find nearest available length.
-        if !indexed.isEmpty {
-            let nearest = indexed.keys.min(by: { abs($0 - key) < abs($1 - key) })!
-            return indexed[nearest]!
+        // Nearest available: scan outward from key.
+        if maxIndex >= 0 {
+            let clamped = min(key, maxIndex)
+            for dist in 0...maxIndex {
+                let lo = clamped - dist
+                let hi = clamped + dist
+                if lo >= 0, let emb = indexed[lo] { return emb }
+                if hi <= maxIndex, let emb = indexed[hi] { return emb }
+            }
         }
 
         return generic
