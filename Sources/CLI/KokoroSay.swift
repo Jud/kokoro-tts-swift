@@ -3,6 +3,16 @@ import AVFoundation
 import Foundation
 import KokoroTTS
 
+extension ModelBucket: ExpressibleByArgument {
+    public init?(argument: String) {
+        for c in Self.allCases where "\(c)" == argument {
+            self = c
+            return
+        }
+        return nil
+    }
+}
+
 @main
 struct KokoroSay: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -23,8 +33,8 @@ struct KokoroSay: ParsableCommand {
     @Option(name: .long, help: "Model directory path")
     var modelDir: String?
 
-    @Option(name: .long, help: "Force model bucket: small, medium")
-    var bucket: String?
+    @Option(name: .long, help: "Force model bucket")
+    var bucket: ModelBucket?
 
     @Flag(name: [.short, .long], help: "Play audio through speakers")
     var play = false
@@ -44,9 +54,6 @@ struct KokoroSay: ParsableCommand {
     func validate() throws {
         guard (0.5...2.0).contains(speed) else {
             throw ValidationError("Speed must be between 0.5 and 2.0")
-        }
-        if let bucket, !["small", "medium"].contains(bucket) {
-            throw ValidationError("Bucket must be 'small' or 'medium'")
         }
     }
 
@@ -79,10 +86,6 @@ struct KokoroSay: ParsableCommand {
             throw ExitCode.failure
         }
 
-        let forcedBucket: ModelBucket? = bucket.map {
-            $0 == "small" ? .small : .medium
-        }
-
         if debug {
             print("Model dir: \(dir.path)")
             print("Loaded buckets: \(engine.activeBuckets.map(\.modelName).joined(separator: ", "))")
@@ -90,7 +93,7 @@ struct KokoroSay: ParsableCommand {
 
         let result = try engine.synthesize(
             text: inputText, voice: voice, speed: speed,
-            bucket: forcedBucket, rawAudio: raw
+            bucket: bucket, rawAudio: raw
         )
 
         if debug { printDebugInfo(result: result) }
@@ -132,7 +135,22 @@ struct KokoroSay: ParsableCommand {
         return result
     }
 
-    // MARK: - WAV Output
+    // MARK: - Audio Helpers
+
+    private func makePCMBuffer(
+        from samples: [Float], format: AVAudioFormat
+    ) throws -> AVAudioPCMBuffer {
+        guard let buf = AVAudioPCMBuffer(
+            pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)
+        ) else {
+            throw ValidationError("Failed to create audio buffer")
+        }
+        buf.frameLength = AVAudioFrameCount(samples.count)
+        samples.withUnsafeBufferPointer { src in
+            buf.floatChannelData![0].update(from: src.baseAddress!, count: samples.count)
+        }
+        return buf
+    }
 
     private func writeWAV(samples: [Float], to path: String) throws {
         let url = URL(fileURLWithPath: path)
@@ -145,19 +163,9 @@ struct KokoroSay: ParsableCommand {
             AVLinearPCMIsBigEndianKey: false,
         ]
         let file = try AVAudioFile(forWriting: url, settings: settings)
-        guard let buf = AVAudioPCMBuffer(
-            pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(samples.count)
-        ) else {
-            throw ValidationError("Failed to create audio buffer")
-        }
-        buf.frameLength = AVAudioFrameCount(samples.count)
-        samples.withUnsafeBufferPointer { src in
-            buf.floatChannelData![0].update(from: src.baseAddress!, count: samples.count)
-        }
+        let buf = try makePCMBuffer(from: samples, format: file.processingFormat)
         try file.write(from: buf)
     }
-
-    // MARK: - Playback
 
     private func playAudio(samples: [Float]) throws {
         let audioEngine = AVAudioEngine()
@@ -172,17 +180,11 @@ struct KokoroSay: ParsableCommand {
         try audioEngine.start()
         player.play()
 
-        let buf = AVAudioPCMBuffer(
-            pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)
-        )!
-        buf.frameLength = AVAudioFrameCount(samples.count)
-        samples.withUnsafeBufferPointer { src in
-            buf.floatChannelData![0].update(from: src.baseAddress!, count: samples.count)
-        }
-
+        let buf = try makePCMBuffer(from: samples, format: format)
         let done = DispatchSemaphore(value: 0)
         player.scheduleBuffer(buf) { done.signal() }
         done.wait()
+        // Allow audio hardware buffer to flush
         Thread.sleep(forTimeInterval: 0.1)
     }
 
