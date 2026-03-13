@@ -74,5 +74,4 @@ final class Tokenizer: Sendable {
 
         return ids
     }
-
 }

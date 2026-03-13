@@ -125,6 +125,7 @@ struct VoicePack: Sendable {
             for dist in 0...maxIndex {
                 let lo = clamped - dist
                 let hi = clamped + dist
+                if lo < 0, hi > maxIndex { break }
                 if lo >= 0, let emb = indexed[lo] { return emb }
                 if hi <= maxIndex, let emb = indexed[hi] { return emb }
             }
