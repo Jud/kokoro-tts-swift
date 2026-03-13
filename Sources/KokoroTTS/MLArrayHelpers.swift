@@ -31,7 +31,7 @@ enum MLArrayHelpers {
             ptr.update(from: src.baseAddress!, count: n)
         }
         if n < dim {
-            ptr.advanced(by: n).initialize(repeating: 0, count: dim - n)
+            ptr.advanced(by: n).update(repeating: 0, count: dim - n)
         }
     }
 

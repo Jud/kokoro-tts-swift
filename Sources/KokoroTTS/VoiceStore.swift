@@ -116,7 +116,7 @@ struct VoicePack: Sendable {
     func embedding(forTokenCount count: Int) -> [Float] {
         let key = max(0, count - 1)
 
-        // O(1) exact match.
+        // Exact match (O(1) array lookup).
         if key <= maxIndex, let emb = indexed[key] { return emb }
 
         // Nearest available: scan outward from key.

@@ -64,7 +64,6 @@ public final class KokoroEngine: @unchecked Sendable {
     /// Number of random phase channels for the iSTFTNet vocoder.
     private static let numPhases = 9
 
-
     // CoreML model input/output feature names.
     private enum Feature {
         static let inputIds = "input_ids"
@@ -444,15 +443,15 @@ public final class KokoroEngine: @unchecked Sendable {
             let ptr = buf.baseAddress!
             // Fade-in: 5ms ramp 0→1 to suppress onset transient.
             let fadeIn = min(120, buf.count)
-            var startVal: Float = 0
-            var endVal: Float = 1.0
-            vDSP_vrampmul(ptr, 1, &startVal, &endVal, ptr, 1, vDSP_Length(fadeIn))
+            var ramp: Float = 0
+            var step = 1.0 / Float(fadeIn)
+            vDSP_vrampmul(ptr, 1, &ramp, &step, ptr, 1, vDSP_Length(fadeIn))
             // Fade-out: 50ms ramp 1→0 for natural ending.
             let fadeOut = min(1200, buf.count)
             let fadeStart = buf.count - fadeOut
-            startVal = 1.0
-            endVal = 0
-            vDSP_vrampmul(ptr + fadeStart, 1, &startVal, &endVal, ptr + fadeStart, 1, vDSP_Length(fadeOut))
+            ramp = 1.0
+            step = -1.0 / Float(fadeOut)
+            vDSP_vrampmul(ptr + fadeStart, 1, &ramp, &step, ptr + fadeStart, 1, vDSP_Length(fadeOut))
         }
     }
 

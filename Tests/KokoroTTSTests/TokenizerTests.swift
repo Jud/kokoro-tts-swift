@@ -25,7 +25,7 @@ struct TokenizerTests {
         #expect(withEmoji == without)
     }
 
-@Test("Max length enforced")
+    @Test("Max length enforced")
     func maxLength() throws {
         let tok = try makeTokenizer()
         let longIPA = String(repeating: "a", count: 1000)
