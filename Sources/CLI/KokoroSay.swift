@@ -3,15 +3,7 @@ import AVFoundation
 import Foundation
 import KokoroTTS
 
-extension ModelBucket: ExpressibleByArgument {
-    public init?(argument: String) {
-        for c in Self.allCases where "\(c)" == argument {
-            self = c
-            return
-        }
-        return nil
-    }
-}
+extension ModelBucket: ExpressibleByArgument {}
 
 @main
 struct KokoroSay: ParsableCommand {
@@ -143,7 +135,8 @@ struct KokoroSay: ParsableCommand {
         guard let buf = AVAudioPCMBuffer(
             pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)
         ) else {
-            throw ValidationError("Failed to create audio buffer")
+            print("Failed to create audio buffer")
+            throw ExitCode.failure
         }
         buf.frameLength = AVAudioFrameCount(samples.count)
         samples.withUnsafeBufferPointer { src in
@@ -173,11 +166,13 @@ struct KokoroSay: ParsableCommand {
         guard let format = AVAudioFormat(
             standardFormatWithSampleRate: Double(KokoroEngine.sampleRate), channels: 1
         ) else {
-            throw ValidationError("Failed to create audio format")
+            print("Failed to create audio format")
+            throw ExitCode.failure
         }
         audioEngine.attach(player)
         audioEngine.connect(player, to: audioEngine.mainMixerNode, format: format)
         try audioEngine.start()
+        defer { audioEngine.stop() }
         player.play()
 
         let buf = try makePCMBuffer(from: samples, format: format)

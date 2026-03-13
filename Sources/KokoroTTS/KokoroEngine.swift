@@ -4,7 +4,7 @@ import Foundation
 import os
 
 /// Model size bucket for automatic selection based on token count.
-public enum ModelBucket: CaseIterable, Sendable, Comparable {
+public enum ModelBucket: String, CaseIterable, Sendable, Comparable {
     /// Short utterances — 124 tokens max (~5s audio).
     case small
     /// Medium utterances — 242 tokens max (~10s audio).
@@ -33,6 +33,10 @@ public enum ModelBucket: CaseIterable, Sendable, Comparable {
     public static func select(forTokenCount count: Int, available: [ModelBucket]) -> ModelBucket? {
         assert(available == available.sorted(), "available must be sorted ascending")
         return available.first { count <= $0.maxTokens }
+    }
+
+    public static func < (lhs: ModelBucket, rhs: ModelBucket) -> Bool {
+        lhs.maxTokens < rhs.maxTokens
     }
 }
 
