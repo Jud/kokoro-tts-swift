@@ -1,0 +1,9 @@
+.build/
+.swiftpm/
+.DS_Store
+*.tar.gz
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+DerivedData/
+Package.resolved
