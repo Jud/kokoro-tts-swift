@@ -33,7 +33,7 @@ from coreml_ops import register_missing_torch_ops
 register_missing_torch_ops()
 
 sys.path.insert(0, os.path.dirname(__file__))
-from export_coreml import patch_sinegen_for_export, SAMPLES_PER_FRAME
+from export_coreml import patch_sinegen_for_export, SAMPLES_PER_FRAME, SineGen
 
 # ---------------------------------------------------------------------------
 # Stage wrapper modules

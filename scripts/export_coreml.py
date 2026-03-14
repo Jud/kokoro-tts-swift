@@ -24,6 +24,7 @@ from coreml_ops import register_missing_torch_ops
 
 # Re-export utility classes — override these for ANE-compatible versions
 from kokoro.custom_stft import CustomSTFT
+from kokoro.istftnet import SineGen
 
 register_missing_torch_ops()
 
