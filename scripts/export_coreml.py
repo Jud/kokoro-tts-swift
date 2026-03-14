@@ -22,51 +22,30 @@ import torch.nn.functional as F
 import coremltools as ct
 from coreml_ops import register_missing_torch_ops
 
-# Re-export utility classes — override these for ANE-compatible versions
-from kokoro.custom_stft import CustomSTFT
-from kokoro.istftnet import SineGen
+# SineGen inlined from kokoro.istftnet with CoreML-compatible _f02sine.
+# The harness imports this class, so changes here are traced natively.
+# Original _f02sine uses: % 1, in-place ops, F.interpolate(scale_factor=1/K)
+# This version fixes: fmod→floor, in-place→functional, fractional interp→avg_pool1d
 
-register_missing_torch_ops()
+class SineGen(nn.Module):
+    def __init__(self, samp_rate, upsample_scale, harmonic_num=0,
+                 sine_amp=0.1, noise_std=0.003,
+                 voiced_threshold=0, flag_for_pulse=False):
+        super().__init__()
+        self.sine_amp = sine_amp
+        self.noise_std = noise_std
+        self.harmonic_num = harmonic_num
+        self.dim = self.harmonic_num + 1
+        self.sampling_rate = samp_rate
+        self.voiced_threshold = voiced_threshold
+        self.flag_for_pulse = flag_for_pulse
+        self.upsample_scale = upsample_scale
 
-# ---------------------------------------------------------------------------
-# Model config
-# ---------------------------------------------------------------------------
-BUCKETS = {
-    "kokoro_21_5s":  {"max_tokens": 124, "max_audio": 175_800},
-    "kokoro_24_10s": {"max_tokens": 242, "max_audio": 240_000},
-}
+    def _f02uv(self, f0):
+        uv = (f0 > self.voiced_threshold).type(torch.float32)
+        return uv
 
-SAMPLES_PER_FRAME = 600  # decoder upsample (2x) * generator (10*6*5=300)
-NUM_HARMONICS = 9        # fundamental + 8 overtones
-
-
-# ---------------------------------------------------------------------------
-# Monkey-patches for CoreML compatibility
-# ---------------------------------------------------------------------------
-def patch_pack_padded_sequence():
-    """Replace pack_padded_sequence/pad_packed_sequence with no-ops.
-
-    CoreML cannot convert these ops. PyTorch audio quality is identical
-    without them (verified empirically).
-    """
-    nn.utils.rnn.pack_padded_sequence = lambda x, lengths, **kw: x
-    nn.utils.rnn.pad_packed_sequence = lambda x, **kw: (x, None)
-
-
-def patch_sinegen_for_export(model):
-    """Monkey-patch SineGen._f02sine for CoreML compatibility.
-
-    Fixes two CoreML conversion bugs:
-    1. % operator → x - floor(x): CoreML's floor_mod uses C fmod semantics
-       (preserves sign), not Python modulo (always positive).
-    2. F.interpolate(scale_factor=1/K) → avg_pool1d: fractional scale factor
-       causes float precision issues in coremltools upsample_linear1d handler.
-
-    Also replaces in-place tensor ops with functional equivalents.
-    """
-    from kokoro.istftnet import SineGen
-
-    def _f02sine_coreml(self, f0_values):
+    def _f02sine(self, f0_values):
         # Instantaneous frequency as fraction of sample rate
         # Use x - floor(x) instead of % 1 (CoreML's floor_mod has fmod semantics)
         val = f0_values / self.sampling_rate
@@ -96,8 +75,6 @@ def patch_sinegen_for_export(model):
             K = int(self.upsample_scale)
 
             # Downscale: avg_pool1d replaces F.interpolate(scale_factor=1/K)
-            # For nearest-upsampled F0 (constant within each K-sample block),
-            # avg_pool1d gives the same per-frame values as linear interpolation
             rad_t = rad_values.transpose(1, 2)                         # [B, D, L]
             rad_down_t = F.avg_pool1d(rad_t, kernel_size=K, stride=K)  # [B, D, N]
             rad_down = rad_down_t.transpose(1, 2)                      # [B, N, D]
@@ -105,7 +82,7 @@ def patch_sinegen_for_export(model):
             # Cumulative phase at frame rate
             phase_down = torch.cumsum(rad_down, dim=1)  # [B, N, D]
 
-            # Scale by 2πK and upscale with integer scale factor (no float issues)
+            # Scale by 2πK and upscale with integer scale factor
             phase_scaled = phase_down.transpose(1, 2) * (2.0 * torch.pi * K)
             phase_up = F.interpolate(
                 phase_scaled,
@@ -124,12 +101,142 @@ def patch_sinegen_for_export(model):
 
         return sines
 
-    SineGen._f02sine = _f02sine_coreml
+    def forward(self, f0):
+        f0_buf = torch.zeros(f0.shape[0], f0.shape[1], self.dim, device=f0.device)
+        fn = torch.multiply(f0, torch.FloatTensor([[range(1, self.harmonic_num + 2)]]).to(f0.device))
+        sine_waves = self._f02sine(fn) * self.sine_amp
+        uv = self._f02uv(f0)
+        noise_amp = uv * self.noise_std + (1 - uv) * self.sine_amp / 3
+        noise = noise_amp * torch.randn_like(sine_waves)
+        sine_waves = sine_waves * uv + noise
+        return sine_waves, uv, noise
+
+# CustomSTFT copied from kokoro.custom_stft with ANE-compatible transform.
+# The harness imports this class, so changes here are traced natively.
+
+class CustomSTFT(nn.Module):
+    def __init__(self, filter_length=800, hop_length=200, win_length=800,
+                 window="hann", center=True, pad_mode="replicate"):
+        super().__init__()
+        self.filter_length = filter_length
+        self.hop_length = hop_length
+        self.win_length = win_length
+        self.n_fft = filter_length
+        self.center = center
+        self.pad_mode = pad_mode
+        self.freq_bins = self.n_fft // 2 + 1
+
+        assert window == 'hann', window
+        window_tensor = torch.hann_window(win_length, periodic=True, dtype=torch.float32)
+        if self.win_length < self.n_fft:
+            window_tensor = F.pad(window_tensor, (0, self.n_fft - self.win_length))
+        elif self.win_length > self.n_fft:
+            window_tensor = window_tensor[:self.n_fft]
+        self.register_buffer("window", window_tensor)
+
+        n = np.arange(self.n_fft)
+        k = np.arange(self.freq_bins)
+        angle = 2 * np.pi * np.outer(k, n) / self.n_fft
+        dft_real = np.cos(angle)
+        dft_imag = -np.sin(angle)
+
+        forward_window = window_tensor.numpy()
+        forward_real = dft_real * forward_window
+        forward_imag = dft_imag * forward_window
+
+        self.register_buffer("weight_forward_real",
+                             torch.from_numpy(forward_real).float().unsqueeze(1))
+        self.register_buffer("weight_forward_imag",
+                             torch.from_numpy(forward_imag).float().unsqueeze(1))
+
+        inv_scale = 1.0 / self.n_fft
+        angle_t = 2 * np.pi * np.outer(n, k) / self.n_fft
+        idft_cos = np.cos(angle_t).T
+        idft_sin = np.sin(angle_t).T
+        inv_window = window_tensor.numpy() * inv_scale
+
+        self.register_buffer("weight_backward_real",
+                             torch.from_numpy(idft_cos * inv_window).float().unsqueeze(1))
+        self.register_buffer("weight_backward_imag",
+                             torch.from_numpy(idft_sin * inv_window).float().unsqueeze(1))
+
+    def transform(self, waveform):
+        if self.center:
+            pad_len = self.n_fft // 2
+            waveform = F.pad(waveform, (pad_len, pad_len), mode=self.pad_mode)
+        x = waveform.unsqueeze(1)
+        real_out = F.conv1d(x, self.weight_forward_real, bias=None,
+                            stride=self.hop_length, padding=0)
+        imag_out = F.conv1d(x, self.weight_forward_imag, bias=None,
+                            stride=self.hop_length, padding=0)
+        magnitude = torch.sqrt(real_out**2 + imag_out**2 + 1e-14)
+        phase = torch.atan2(imag_out, real_out)
+        correction_mask = (imag_out == 0) & (real_out < 0)
+        phase[correction_mask] = torch.pi
+        return magnitude, phase
+
+    def inverse(self, magnitude, phase, length=None):
+        real_part = magnitude * torch.cos(phase)
+        imag_part = magnitude * torch.sin(phase)
+        real_rec = F.conv_transpose1d(real_part, self.weight_backward_real,
+                                      bias=None, stride=self.hop_length, padding=0)
+        imag_rec = F.conv_transpose1d(imag_part, self.weight_backward_imag,
+                                      bias=None, stride=self.hop_length, padding=0)
+        waveform = real_rec - imag_rec
+        if self.center:
+            pad_len = self.n_fft // 2
+            waveform = waveform[..., pad_len:-pad_len]
+        if length is not None:
+            waveform = waveform[..., :length]
+        return waveform
+
+    def forward(self, x):
+        mag, phase = self.transform(x)
+        return self.inverse(mag, phase, length=x.shape[-1])
+
+register_missing_torch_ops()
+
+# ---------------------------------------------------------------------------
+# Model config
+# ---------------------------------------------------------------------------
+BUCKETS = {
+    "kokoro_21_5s":  {"max_tokens": 124, "max_audio": 175_800},
+    "kokoro_24_10s": {"max_tokens": 242, "max_audio": 240_000},
+}
+
+SAMPLES_PER_FRAME = 600  # decoder upsample (2x) * generator (10*6*5=300)
+NUM_HARMONICS = 9        # fundamental + 8 overtones
+
+
+# ---------------------------------------------------------------------------
+# Monkey-patches for CoreML compatibility
+# ---------------------------------------------------------------------------
+def patch_pack_padded_sequence():
+    """Replace pack_padded_sequence/pad_packed_sequence with no-ops.
+
+    CoreML cannot convert these ops. PyTorch audio quality is identical
+    without them (verified empirically).
+    """
+    nn.utils.rnn.pack_padded_sequence = lambda x, lengths, **kw: x
+    nn.utils.rnn.pad_packed_sequence = lambda x, **kw: (x, None)
+
+
+def patch_sinegen_for_export(model):
+    """Apply inlined SineGen to the model and return a phases helper.
+
+    The inlined SineGen class (above) has CoreML-compatible _f02sine built in.
+    This function applies it to the loaded model's SineGen instances via
+    class-level method replacement, and provides the set_phases helper.
+    """
+    from kokoro.istftnet import SineGen as OriginalSineGen
+
+    # Apply inlined _f02sine to the original class so existing instances use it
+    OriginalSineGen._f02sine = SineGen._f02sine
 
     # Helper to set external phases on all SineGen instances
     def set_phases(module, phases):
         for m in module.modules():
-            if isinstance(m, SineGen):
+            if isinstance(m, OriginalSineGen):
                 m._external_phases = phases
 
     return set_phases
