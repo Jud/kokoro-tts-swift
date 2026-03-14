@@ -12,6 +12,7 @@ Usage:
 """
 import argparse
 import os
+import subprocess
 
 import numpy as np
 import torch
@@ -19,36 +20,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import coremltools as ct
-from coremltools.converters.mil.frontend.torch.torch_op_registry import (
-    _TORCH_OPS_REGISTRY,
-    register_torch_op,
-)
-from coremltools.converters.mil import Builder as mb
+from coreml_ops import register_missing_torch_ops
 
-# ---------------------------------------------------------------------------
-# Register missing torch ops for coremltools
-# ---------------------------------------------------------------------------
-if "new_ones" not in _TORCH_OPS_REGISTRY:
-    @register_torch_op
-    def new_ones(context, node):
-        size = context[node.inputs[1]]
-        shape = mb.cast(x=size, dtype="int32", name=node.name + "_shape")
-        result = mb.fill(shape=shape, value=1.0, name=node.name)
-        context.add(result)
-
-if "new_zeros" not in _TORCH_OPS_REGISTRY:
-    @register_torch_op
-    def new_zeros(context, node):
-        size = context[node.inputs[1]]
-        shape = mb.cast(x=size, dtype="int32", name=node.name + "_shape")
-        result = mb.fill(shape=shape, value=0.0, name=node.name)
-        context.add(result)
-
-if "multiply" not in _TORCH_OPS_REGISTRY:
-    @register_torch_op
-    def multiply(context, node):
-        from coremltools.converters.mil.frontend.torch.ops import mul
-        mul(context, node)
+register_missing_torch_ops()
 
 # ---------------------------------------------------------------------------
 # Model config
@@ -325,10 +299,15 @@ def export_bucket(pipeline, model, set_phases_fn, bucket_name, bucket_config,
     print(f"  Saved {mlpackage_path}")
 
     print("  Compiling to .mlmodelc...")
-    os.system(f"xcrun coremlcompiler compile '{mlpackage_path}' '{output_dir}'")
+    compile_result = subprocess.run(
+        ["xcrun", "coremlcompiler", "compile", mlpackage_path, output_dir],
+        capture_output=True, text=True
+    )
     compiled_path = os.path.join(output_dir, f"{bucket_name}.mlmodelc")
-    if os.path.exists(compiled_path):
+    if compile_result.returncode == 0 and os.path.exists(compiled_path):
         print(f"  Compiled: {compiled_path}")
+    else:
+        print(f"  Compilation failed: {compile_result.stderr[:200]}")
 
     if verify:
         verify_export(pipeline, model, set_phases_fn, mlmodel,
