@@ -22,6 +22,9 @@ import torch.nn.functional as F
 import coremltools as ct
 from coreml_ops import register_missing_torch_ops
 
+# Re-export utility classes — override these for ANE-compatible versions
+from kokoro.custom_stft import CustomSTFT
+
 register_missing_torch_ops()
 
 # ---------------------------------------------------------------------------

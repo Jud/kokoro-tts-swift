@@ -389,7 +389,7 @@ def test_stage(name, module, example_inputs, input_specs, output_names=None):
 
 def load_model():
     from kokoro import KPipeline
-    from kokoro.istftnet import CustomSTFT
+    from export_coreml import CustomSTFT
 
     pipeline = KPipeline(lang_code="a")
     model = pipeline.model
