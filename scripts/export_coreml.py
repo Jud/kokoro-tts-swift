@@ -116,7 +116,7 @@ class SineGen(nn.Module):
 
 class CustomSTFT(nn.Module):
     def __init__(self, filter_length=800, hop_length=200, win_length=800,
-                 window="hann", center=True, pad_mode="replicate"):
+                 window="hann", center=True, pad_mode="reflect"):
         super().__init__()
         self.filter_length = filter_length
         self.hop_length = hop_length
