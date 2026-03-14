@@ -47,16 +47,19 @@ Since the harness is fixed, you don't need to worry about evaluation — it's al
 - Modify the Kokoro model weights or architecture in `.venv/`.
 - Install new packages beyond what's in `.venv/`.
 
-## Logging results
+## Logging results (MANDATORY)
 
-Log every experiment to `research/results.tsv` (tab-separated). Do NOT commit this file — leave it untracked so `git reset` doesn't wipe your log.
+**You MUST log every experiment to `research/results.tsv`** (tab-separated). This is not optional — every harness run, whether it succeeds, fails, or crashes, must be recorded. Do NOT commit this file — leave it untracked so `git reset` doesn't wipe your log.
 
 ```
 commit	stage	cpu_corr	ane_corr	cpu_warm_ms	ane_warm_ms	status	description
 ```
 
+- One row per stage per experiment. If you ran all 9 stages, that's 9 rows.
 - status: `keep`, `discard`, or `crash`
 - Use `--json` to get machine-parseable output for extracting values.
+- **If results.tsv doesn't exist yet, create it with the header row before your first run.**
+- **Never skip logging.** The results.tsv is the ground truth record of what was tried and what happened. Without it, previous experiments may be repeated and progress is invisible.
 
 ## The experiment loop
 

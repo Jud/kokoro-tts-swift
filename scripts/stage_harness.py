@@ -712,6 +712,38 @@ def _merge_results(all_runs):
     return list(merged.values())
 
 
+MINIMUM_EXPERIMENT_SECONDS = 600  # 10 minutes
+
+
+def _emit_results(all_runs, sentences, args):
+    """Format and print results (text or JSON)."""
+    if not args.json:
+        for label, results in zip(sentences.keys(), all_runs):
+            print(f"\n--- {label} ---")
+            print_results(results)
+
+        # Also print worst-case summary if multiple sentences
+        if len(all_runs) > 1:
+            merged = _merge_results(all_runs)
+            print(f"\n--- WORST CASE across {len(sentences)} sentences ---")
+            print_results(merged)
+    else:
+        out = {}
+        for label, results in zip(sentences.keys(), all_runs):
+            for r in results:
+                for c in r.get("comparisons", []):
+                    for k in list(c.keys()):
+                        if isinstance(c[k], (np.floating, np.integer)):
+                            c[k] = float(c[k])
+            out[label] = results
+        if len(all_runs) > 1:
+            merged = _merge_results(all_runs)
+            for r in merged:
+                r.pop("_runs", None)
+            out["worst_case"] = merged
+        print(json.dumps(out, indent=2))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Stage-by-stage CoreML harness")
     parser.add_argument("--stage", type=int,
@@ -720,6 +752,8 @@ def main():
     parser.add_argument("--text", default=None,
                         help="Single test sentence (overrides multi-sentence)")
     args = parser.parse_args()
+
+    experiment_start = time.time()
 
     print("Loading model...")
     pipeline, model, set_phases_fn = load_model()
@@ -761,32 +795,20 @@ def main():
         )
         all_runs.append(results)
 
-    # Print per-sentence results
-    if not args.json:
-        for label, results in zip(sentences.keys(), all_runs):
-            print(f"\n--- {label} ---")
-            print_results(results)
+    # Enforce minimum experiment time before revealing results
+    elapsed = time.time() - experiment_start
+    remaining = MINIMUM_EXPERIMENT_SECONDS - elapsed
+    if remaining > 0:
+        print(f"\n{'='*88}")
+        print(f"Experiment complete. Withholding results until minimum experiment")
+        print(f"time of {MINIMUM_EXPERIMENT_SECONDS // 60} minutes has elapsed.")
+        print(f"Elapsed: {elapsed:.0f}s — waiting {remaining:.0f}s more...")
+        print(f"{'='*88}")
+        sys.stdout.flush()
+        time.sleep(remaining)
+        print(f"\nExperiment time reached. Releasing results.\n")
 
-        # Also print worst-case summary if multiple sentences
-        if len(all_runs) > 1:
-            merged = _merge_results(all_runs)
-            print(f"\n--- WORST CASE across {len(sentences)} sentences ---")
-            print_results(merged)
-    else:
-        out = {}
-        for label, results in zip(sentences.keys(), all_runs):
-            for r in results:
-                for c in r.get("comparisons", []):
-                    for k in list(c.keys()):
-                        if isinstance(c[k], (np.floating, np.integer)):
-                            c[k] = float(c[k])
-            out[label] = results
-        if len(all_runs) > 1:
-            merged = _merge_results(all_runs)
-            for r in merged:
-                r.pop("_runs", None)
-            out["worst_case"] = merged
-        print(json.dumps(out, indent=2))
+    _emit_results(all_runs, sentences, args)
 
 
 if __name__ == "__main__":
