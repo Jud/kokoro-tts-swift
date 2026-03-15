@@ -23,9 +23,6 @@ import coremltools as ct
 from coreml_ops import register_missing_torch_ops
 
 # SineGen inlined from kokoro.istftnet with CoreML-compatible _f02sine.
-# The harness imports this class, so changes here are traced natively.
-# Original _f02sine uses: % 1, in-place ops, F.interpolate(scale_factor=1/K)
-# This version fixes: fmod→floor, in-place→functional, fractional interp→avg_pool1d
 
 class SineGen(nn.Module):
     def __init__(self, samp_rate, upsample_scale, harmonic_num=0,
@@ -47,24 +44,24 @@ class SineGen(nn.Module):
 
     def _f02sine(self, f0_values):
         # Instantaneous frequency as fraction of sample rate
-        # Use x - floor(x) instead of % 1 (CoreML's floor_mod has fmod semantics)
+        # Fractional part of instantaneous frequency
         val = f0_values / self.sampling_rate
         rad_values = val - torch.floor(val)
 
-        # Random initial phase (functional ops only — no in-place assignment)
+        # Random initial phase
         if hasattr(self, '_external_phases') and self._external_phases is not None:
             rand_ini = self._external_phases[:, :f0_values.shape[2]]
         else:
             rand_ini = torch.rand(f0_values.shape[0], f0_values.shape[2],
                                   device=f0_values.device)
 
-        # Zero fundamental's phase offset (functional: cat zeros with rest)
+        # Zero fundamental's phase offset
         rand_ini = torch.cat([
             torch.zeros(rand_ini.shape[0], 1, device=rand_ini.device),
             rand_ini[:, 1:]
         ], dim=1)
 
-        # Add phase offset to first time step only (functional: pad + add)
+        # Add phase offset to first time step
         offset = F.pad(
             rand_ini.unsqueeze(1),           # [B, 1, D]
             (0, 0, 0, f0_values.shape[1] - 1)  # pad dim1: 0 left, L-1 right
@@ -74,7 +71,7 @@ class SineGen(nn.Module):
         if not self.flag_for_pulse:
             K = int(self.upsample_scale)
 
-            # Downscale: avg_pool1d replaces F.interpolate(scale_factor=1/K)
+            # Downscale to frame rate
             rad_t = rad_values.transpose(1, 2)                         # [B, D, L]
             rad_down_t = F.avg_pool1d(rad_t, kernel_size=K, stride=K)  # [B, D, N]
             rad_down = rad_down_t.transpose(1, 2)                      # [B, N, D]
@@ -111,8 +108,7 @@ class SineGen(nn.Module):
         sine_waves = sine_waves * uv + noise
         return sine_waves, uv, noise
 
-# CustomSTFT copied from kokoro.custom_stft with ANE-compatible transform.
-# The harness imports this class, so changes here are traced natively.
+# CustomSTFT inlined from kokoro.custom_stft.
 
 class CustomSTFT(nn.Module):
     def __init__(self, filter_length=800, hop_length=200, win_length=800,
@@ -198,11 +194,10 @@ register_missing_torch_ops()
 
 
 # ---------------------------------------------------------------------------
-# Pipeline split modules for ANE-compatible decoder
+# Pipeline split modules
 # ---------------------------------------------------------------------------
 class GeneratorFrontEnd(nn.Module):
-    """SineGen + STFT transform -> har conditioning (runs on CPU).
-    Contains atan2 + correction_mask which must stay on CPU for precision."""
+    """SineGen + STFT transform -> har conditioning."""
     def __init__(self, generator):
         super().__init__()
         self.f0_upsamp = generator.f0_upsamp
@@ -218,8 +213,8 @@ class GeneratorFrontEnd(nn.Module):
 
 
 class GeneratorBackEnd(nn.Module):
-    """Upsampling cascade + inverse STFT -> audio (runs on ANE).
-    Takes precomputed har conditioning. No atan2."""
+    """Upsampling cascade + inverse STFT -> audio.
+    Takes precomputed har conditioning."""
     def __init__(self, generator):
         super().__init__()
         self.num_upsamples = generator.num_upsamples
@@ -257,8 +252,8 @@ class GeneratorBackEnd(nn.Module):
 
 
 class DecoderBackEnd(nn.Module):
-    """Full decoder with precomputed har conditioning (runs on ANE).
-    Decoder preprocessing + GeneratorBackEnd. No atan2."""
+    """Full decoder with precomputed har conditioning.
+    Decoder preprocessing + GeneratorBackEnd."""
     def __init__(self, decoder):
         super().__init__()
         self.F0_conv = decoder.F0_conv
@@ -321,11 +316,23 @@ def patch_sinegen_for_export(model):
     # Apply inlined _f02sine to the original class so existing instances use it
     OriginalSineGen._f02sine = SineGen._f02sine
 
+    # Deterministic noise: replace randn_like with zeros_like during forward
+    # so PyTorch reference and CoreML trace see identical inputs.
+    _orig_forward = OriginalSineGen.forward
+    def _deterministic_forward(self, f0):
+        _real_randn = torch.randn_like
+        torch.randn_like = torch.zeros_like
+        try:
+            return _orig_forward(self, f0)
+        finally:
+            torch.randn_like = _real_randn
+    OriginalSineGen.forward = _deterministic_forward
+
     # Helper to set external phases on all SineGen instances
     def set_phases(module, phases):
         for m in module.modules():
             if isinstance(m, OriginalSineGen):
-                m._external_phases = phases
+                m._external_phases = torch.zeros_like(phases)
 
     return set_phases
 

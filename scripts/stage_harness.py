@@ -145,10 +145,7 @@ class Stage7_Generator(nn.Module):
 
 
 class SplitA_Predictor(nn.Module):
-    """Split model A: BERT + Duration + Alignment + F0/N + TextEncoder (stages 1-5).
-
-    This is the proposed front-half for ANE-compatible split export.
-    """
+    """Split model A: BERT + Duration + Alignment + F0/N + TextEncoder (stages 1-5)."""
     def __init__(self, model, max_frames):
         super().__init__()
         self.bert = model.bert
@@ -193,7 +190,7 @@ class SplitA_Predictor(nn.Module):
 
 
 class SplitB_Decoder(nn.Module):
-    """Split model B: Decoder (stage 6). Back-half for ANE-compatible split export."""
+    """Split model B: Decoder (stage 6)."""
     def __init__(self, model):
         super().__init__()
         self.decoder = model.decoder
@@ -397,10 +394,8 @@ def test_pipeline_stage(name, frontend_module, backend_module,
                         backend_extra_inputs, backend_extra_specs,
                         py_reference_output, output_names=None,
                         active_length=None):
-    """Test a two-model pipeline: frontend on CPU, backend on ANE.
+    """Test a two-model pipeline: frontend on CPU_ONLY, backend on ALL.
 
-    The frontend (STFT transform) runs on CPU for atan2 precision.
-    The backend (neural network) runs on ANE for speed.
     Correlation is measured against py_reference_output.
     """
     result = {"name": name, "status": "unknown"}
@@ -738,7 +733,7 @@ def _build_stage_configs(model, im, max_frames):
     except Exception as e:
         stages.append((7, "7_generator", None, None, None, None))
 
-    # ---- Split models (proposed ANE-compatible export) ----
+    # ---- Split models ----
     # Split A: stages 1-5 combined (predictor)
     stages.append((8, "split_A", SplitA_Predictor(model, max_frames),
         (im["input_ids"], im["attention_mask"], im["ref_s"], im["speed"]),
