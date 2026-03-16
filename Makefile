@@ -7,10 +7,10 @@ build:
 
 install: build
 	install -d "$(PREFIX)/bin"
-	install ".build/release/kokoro-say" "$(PREFIX)/bin/kokoro-say"
+	install ".build/release/kokoro" "$(PREFIX)/bin/kokoro"
 
 uninstall:
-	rm -f "$(PREFIX)/bin/kokoro-say"
+	rm -f "$(PREFIX)/bin/kokoro"
 
 clean:
 	swift package clean

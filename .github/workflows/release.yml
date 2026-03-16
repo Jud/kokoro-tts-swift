@@ -25,9 +25,9 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
-          STAGING="kokoro-say-${VERSION}-macos-arm64"
+          STAGING="kokoro-${VERSION}-macos-arm64"
           mkdir -p "$STAGING"
-          cp .build/release/kokoro-say "$STAGING/"
+          cp .build/release/kokoro "$STAGING/"
           tar czf "${STAGING}.tar.gz" "$STAGING"
           shasum -a 256 "${STAGING}.tar.gz" > "${STAGING}.tar.gz.sha256"
           echo "TARBALL=${STAGING}.tar.gz" >> $GITHUB_ENV
@@ -36,7 +36,7 @@ jobs:
       - name: Create GitHub release
         run: |
           gh release create "${GITHUB_REF_NAME}" "${{ env.TARBALL }}" "${{ env.TARBALL }}.sha256" \
-            --title "kokoro-say ${{ env.VERSION }}" \
+            --title "kokoro ${{ env.VERSION }}" \
             --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

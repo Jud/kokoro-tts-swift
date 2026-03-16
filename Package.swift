@@ -6,7 +6,7 @@ let package = Package(
     platforms: [.macOS(.v15), .iOS(.v18)],
     products: [
         .library(name: "KokoroTTS", targets: ["KokoroTTS"]),
-        .executable(name: "kokoro-say", targets: ["CLI"]),
+        .executable(name: "kokoro", targets: ["CLI"]),
     ],
     dependencies: [
         .package(url: "https://github.com/Jud/swift-bart-g2p.git", from: "0.3.0"),
@@ -16,11 +16,11 @@ let package = Package(
         .target(
             name: "KokoroTTS",
             dependencies: [
-                .product(name: "BARTG2P", package: "swift-bart-g2p"),
+                .product(name: "BARTG2P", package: "swift-bart-g2p")
             ],
             path: "Sources/KokoroTTS",
             resources: [
-                .process("Resources"),
+                .process("Resources")
             ]
         ),
         .executableTarget(

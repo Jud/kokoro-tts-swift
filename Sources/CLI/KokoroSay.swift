@@ -6,11 +6,21 @@ import KokoroTTS
 extension ModelBucket: ExpressibleByArgument {}
 
 @main
-struct KokoroSay: AsyncParsableCommand {
+struct Kokoro: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "kokoro-say",
-        abstract: "Text-to-speech using KokoroTTS",
-        version: "1.0.0"
+        commandName: "kokoro",
+        abstract: "Kokoro text-to-speech",
+        version: "0.3.0",
+        subcommands: [Say.self, Update.self],
+        defaultSubcommand: Say.self
+    )
+}
+
+// MARK: - Say
+
+struct Say: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Synthesize text to speech"
     )
 
     @Option(name: [.short, .long], help: "Voice preset")
@@ -43,9 +53,6 @@ struct KokoroSay: AsyncParsableCommand {
     @Flag(name: .long, help: "List available voices")
     var listVoices = false
 
-    @Flag(name: .long, help: "Download latest models")
-    var updateModels = false
-
     @Argument(help: "Text to synthesize (reads stdin if omitted)")
     var text: [String] = []
 
@@ -58,22 +65,7 @@ struct KokoroSay: AsyncParsableCommand {
     }
 
     mutating func run() async throws {
-        let dir: URL
-        if let modelDir {
-            dir = URL(fileURLWithPath: modelDir)
-        } else {
-            dir = ModelManager.defaultDirectory()
-        }
-
-        if updateModels {
-            try ModelDownloader.download(to: dir)
-            guard ModelManager.modelsAvailable(at: dir) else {
-                fputs("Download completed but models could not be loaded.\n", stderr)
-                throw ExitCode.failure
-            }
-            fputs("Models updated.\n", stderr)
-            return
-        }
+        let dir = modelDir.map { URL(fileURLWithPath: $0) } ?? ModelManager.defaultDirectory()
 
         if !ModelManager.modelsAvailable(at: dir) {
             try ModelDownloader.download(to: dir)
@@ -277,6 +269,26 @@ struct KokoroSay: AsyncParsableCommand {
                     format: "    t%02d: dur=%2d  %6d-%6d  peak=%.3f",
                     i, dur, startSample, endSample, peak))
             cumFrames += dur
+        }
+    }
+}
+
+// MARK: - Update
+
+struct Update: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Download latest models"
+    )
+
+    @Option(name: .long, help: "Model directory path")
+    var modelDir: String?
+
+    mutating func run() async throws {
+        let dir = modelDir.map { URL(fileURLWithPath: $0) } ?? ModelManager.defaultDirectory()
+        try ModelDownloader.download(to: dir)
+        guard ModelManager.modelsAvailable(at: dir) else {
+            fputs("Download completed but models could not be loaded.\n", stderr)
+            throw ExitCode.failure
         }
     }
 }
