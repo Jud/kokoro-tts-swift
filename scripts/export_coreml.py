@@ -22,39 +22,24 @@ import torch.nn.functional as F
 import coremltools as ct
 from coreml_ops import register_missing_torch_ops
 
-# SineGen inlined from kokoro.istftnet with CoreML-compatible _f02sine.
+# CoreML-compatible _f02sine for SineGen.
+# Only _f02sine is used — it gets monkey-patched onto the original SineGen class.
+# The original __init__, _f02uv, and forward are kept on the original class.
 
-class SineGen(nn.Module):
-    def __init__(self, samp_rate, upsample_scale, harmonic_num=0,
-                 sine_amp=0.1, noise_std=0.003,
-                 voiced_threshold=0, flag_for_pulse=False):
-        super().__init__()
-        self.sine_amp = sine_amp
-        self.noise_std = noise_std
-        self.harmonic_num = harmonic_num
-        self.dim = self.harmonic_num + 1
-        self.sampling_rate = samp_rate
-        self.voiced_threshold = voiced_threshold
-        self.flag_for_pulse = flag_for_pulse
-        self.upsample_scale = upsample_scale
-
-    def _f02uv(self, f0):
-        uv = (f0 > self.voiced_threshold).type(torch.float32)
-        return uv
-
+class SineGen:
+    @staticmethod
     def _f02sine(self, f0_values):
-        # Instantaneous frequency as fraction of sample rate
+        """CoreML-compatible phase computation: fractional freq → pool → cumsum → interpolate → sin."""
         val = f0_values / self.sampling_rate
         rad_values = val - torch.floor(val)
 
         if not self.flag_for_pulse:
             K = int(self.upsample_scale)
 
-            # Work in [B, D, L] format throughout to minimize transposes
-            # (avg_pool1d and interpolate expect channels-first)
+            # Work in [B, D, L] channels-first format to minimize transposes
             x = rad_values.transpose(1, 2)                       # [B, D, L]
             x = F.avg_pool1d(x, kernel_size=K, stride=K)         # [B, D, N]
-            x = torch.cumsum(x, dim=2)                           # [B, D, N] cumsum along time
+            x = torch.cumsum(x, dim=2)                           # [B, D, N]
             x = x * (2.0 * torch.pi * K)
             x = F.interpolate(x, scale_factor=float(K),
                               mode='linear', align_corners=True)  # [B, D, N*K]
@@ -67,16 +52,6 @@ class SineGen(nn.Module):
             sines = torch.sin(phase)
 
         return sines
-
-    def forward(self, f0):
-        f0_buf = torch.zeros(f0.shape[0], f0.shape[1], self.dim, device=f0.device)
-        fn = torch.multiply(f0, torch.FloatTensor([[range(1, self.harmonic_num + 2)]]).to(f0.device))
-        sine_waves = self._f02sine(fn) * self.sine_amp
-        uv = self._f02uv(f0)
-        noise_amp = uv * self.noise_std + (1 - uv) * self.sine_amp / 3
-        noise = noise_amp * torch.randn_like(sine_waves)
-        sine_waves = sine_waves * uv + noise
-        return sine_waves, uv, noise
 
 # CustomSTFT inlined from kokoro.custom_stft.
 
