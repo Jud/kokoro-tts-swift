@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    name: Build & Release
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.2"
+
+      - name: Build release binary
+        run: swift build -c release
+
+      - name: Package binary
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          STAGING="kokoro-say-${VERSION}-macos-arm64"
+          mkdir -p "$STAGING"
+          cp .build/release/kokoro-say "$STAGING/"
+          tar czf "${STAGING}.tar.gz" "$STAGING"
+          shasum -a 256 "${STAGING}.tar.gz" > "${STAGING}.tar.gz.sha256"
+          echo "TARBALL=${STAGING}.tar.gz" >> $GITHUB_ENV
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+      - name: Create GitHub release
+        run: |
+          gh release create "${GITHUB_REF_NAME}" "${{ env.TARBALL }}" "${{ env.TARBALL }}.sha256" \
+            --title "kokoro-say ${{ env.VERSION }}" \
+            --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
