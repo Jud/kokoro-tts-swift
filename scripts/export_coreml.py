@@ -89,8 +89,7 @@ class SineGen(nn.Module):
             )  # [B, D, N*K]
             phase = phase_up.transpose(1, 2)  # [B, N*K, D]
 
-            # Wrap phase to [0, 2π) — CoreML's sin() loses precision for
-            # large arguments (higher harmonics reach 25,000+ radians)
+            # Wrap phase to [0, 2π)
             two_pi = 2.0 * torch.pi
             phase = phase - two_pi * torch.floor(phase / two_pi)
 
@@ -313,11 +312,10 @@ def patch_sinegen_for_export(model):
     """
     from kokoro.istftnet import SineGen as OriginalSineGen
 
-    # Apply inlined _f02sine to the original class so existing instances use it
+    # Replace _f02sine on the original class
     OriginalSineGen._f02sine = SineGen._f02sine
 
-    # Deterministic noise: replace randn_like with zeros_like during forward
-    # so PyTorch reference and CoreML trace see identical inputs.
+    # Deterministic noise for reproducible comparisons
     _orig_forward = OriginalSineGen.forward
     def _deterministic_forward(self, f0):
         _real_randn = torch.randn_like
@@ -328,7 +326,7 @@ def patch_sinegen_for_export(model):
             torch.randn_like = _real_randn
     OriginalSineGen.forward = _deterministic_forward
 
-    # Helper to set external phases on all SineGen instances
+    # Set external phases on all SineGen instances
     def set_phases(module, phases):
         for m in module.modules():
             if isinstance(m, OriginalSineGen):
@@ -360,7 +358,7 @@ def load_kokoro_model():
 
 
 # ---------------------------------------------------------------------------
-# Static wrapper for CoreML export
+# Fixed-shape wrapper for export
 # ---------------------------------------------------------------------------
 class KokoroStaticWrapper(nn.Module):
     """Fixed-shape wrapper for CoreML export.
