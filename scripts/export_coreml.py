@@ -47,29 +47,18 @@ class SineGen(nn.Module):
         val = f0_values / self.sampling_rate
         rad_values = val - torch.floor(val)
 
-        # Phase offset is always zero (external_phases set to zeros).
-        # Skip the dead offset computation entirely.
-
         if not self.flag_for_pulse:
             K = int(self.upsample_scale)
 
-            # Downscale to frame rate
-            rad_t = rad_values.transpose(1, 2)                         # [B, D, L]
-            rad_down_t = F.avg_pool1d(rad_t, kernel_size=K, stride=K)  # [B, D, N]
-            rad_down = rad_down_t.transpose(1, 2)                      # [B, N, D]
-
-            # Cumulative phase at frame rate
-            phase_down = torch.cumsum(rad_down, dim=1)  # [B, N, D]
-
-            # Scale by 2πK and upscale with integer scale factor
-            phase_scaled = phase_down.transpose(1, 2) * (2.0 * torch.pi * K)
-            phase_up = F.interpolate(
-                phase_scaled,
-                scale_factor=float(K),
-                mode='linear',
-                align_corners=True
-            )  # [B, D, N*K]
-            phase = phase_up.transpose(1, 2)  # [B, N*K, D]
+            # Work in [B, D, L] format throughout to minimize transposes
+            # (avg_pool1d and interpolate expect channels-first)
+            x = rad_values.transpose(1, 2)                       # [B, D, L]
+            x = F.avg_pool1d(x, kernel_size=K, stride=K)         # [B, D, N]
+            x = torch.cumsum(x, dim=2)                           # [B, D, N] cumsum along time
+            x = x * (2.0 * torch.pi * K)
+            x = F.interpolate(x, scale_factor=float(K),
+                              mode='linear', align_corners=True)  # [B, D, N*K]
+            phase = x.transpose(1, 2)                             # [B, N*K, D]
 
             # Wrap phase to [0, 2π)
             two_pi = 2.0 * torch.pi
