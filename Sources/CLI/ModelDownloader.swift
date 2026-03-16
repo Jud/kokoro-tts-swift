@@ -40,6 +40,27 @@ enum ModelDownloader {
         URL(string: "https://github.com/\(repo)/releases/download/\(tag)/\(asset)")!
     }
 
+    private static func installedTag(at directory: URL) -> String? {
+        let tagFile = directory.appendingPathComponent(".model-tag")
+        return try? String(contentsOf: tagFile, encoding: .utf8).trimmingCharacters(
+            in: .whitespacesAndNewlines)
+    }
+
+    private static func writeInstalledTag(_ tag: String, at directory: URL) {
+        let tagFile = directory.appendingPathComponent(".model-tag")
+        try? tag.write(to: tagFile, atomically: true, encoding: .utf8)
+    }
+
+    static func checkForUpdates(at directory: URL) {
+        guard let installed = installedTag(at: directory) else { return }
+        guard let latest = try? latestModelTag() else { return }
+        if latest != installed {
+            fputs(
+                "newer models available (\(installed) → \(latest)). run: kokoro-say --update-models\n", stderr
+            )
+        }
+    }
+
     static func download(to directory: URL) throws {
         let fm = FileManager.default
         try fm.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -117,6 +138,7 @@ enum ModelDownloader {
             throw CocoaError(.fileReadCorruptFile)
         }
 
+        writeInstalledTag(tag, at: directory)
         fputs("  Models installed to \(directory.path)\n", stderr)
     }
 }

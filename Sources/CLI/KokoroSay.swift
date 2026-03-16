@@ -43,6 +43,9 @@ struct KokoroSay: AsyncParsableCommand {
     @Flag(name: .long, help: "List available voices")
     var listVoices = false
 
+    @Flag(name: .long, help: "Download latest models")
+    var updateModels = false
+
     @Argument(help: "Text to synthesize (reads stdin if omitted)")
     var text: [String] = []
 
@@ -62,12 +65,24 @@ struct KokoroSay: AsyncParsableCommand {
             dir = ModelManager.defaultDirectory()
         }
 
+        if updateModels {
+            try ModelDownloader.download(to: dir)
+            guard ModelManager.modelsAvailable(at: dir) else {
+                fputs("Download completed but models could not be loaded.\n", stderr)
+                throw ExitCode.failure
+            }
+            fputs("Models updated.\n", stderr)
+            return
+        }
+
         if !ModelManager.modelsAvailable(at: dir) {
             try ModelDownloader.download(to: dir)
             guard ModelManager.modelsAvailable(at: dir) else {
                 fputs("Download completed but models could not be loaded.\n", stderr)
                 throw ExitCode.failure
             }
+        } else {
+            ModelDownloader.checkForUpdates(at: dir)
         }
 
         let engine = try KokoroEngine(modelDirectory: dir)
