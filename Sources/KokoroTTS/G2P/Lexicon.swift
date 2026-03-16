@@ -126,7 +126,7 @@ final class Lexicon {
 
     func transcribe(_ token: MToken, ctx: TokenContext) -> (String?, Int?) {
         var word = token.text
-        if let alias = token.`_`.alias { word = alias }
+        if let alias = token.meta.alias { word = alias }
         word =
             word.replacingOccurrences(of: String(UnicodeScalar(8216)!), with: "'")
             .replacingOccurrences(of: String(UnicodeScalar(8217)!), with: "'")
@@ -136,19 +136,19 @@ final class Lexicon {
 
         let stress: Double? =
             (word == word.lowercased()
-            ? nil : (word == word.uppercased() ? capStresses.1 : capStresses.0))
+                ? nil : (word == word.uppercased() ? capStresses.1 : capStresses.0))
         let res = getWord(word, tag: token.tag, stress: stress, ctx: ctx)
         if let phoneme = res.phoneme {
             return (
                 Lexicon.applyStress(
-                    appendCurrency(phoneme, currency: token.`_`.currency), stress: token.`_`.stress),
+                    appendCurrency(phoneme, currency: token.meta.currency), stress: token.meta.stress),
                 res.rating
             )
-        } else if isNumber(word: word, is_head: token.`_`.is_head) {
+        } else if isNumber(word: word, is_head: token.meta.is_head) {
             let num = getNumber(
-                word, currency: token.`_`.currency, is_head: token.`_`.is_head,
-                num_flags: token.`_`.num_flags)
-            return (Lexicon.applyStress(num.0, stress: token.`_`.stress), num.1)
+                word, currency: token.meta.currency, is_head: token.meta.is_head,
+                num_flags: token.meta.num_flags)
+            return (Lexicon.applyStress(num.0, stress: token.meta.stress), num.1)
         } else if !word.unicodeScalars.allSatisfy({
             Lexicon.lexiconOrdinals.contains(Int($0.value))
         }) {
@@ -646,7 +646,9 @@ final class Lexicon {
             if pairs.count > 1 {
                 if pairs[1].0 == 0 {
                     pairs = Array(pairs.prefix(1))
-                } else if pairs[0].0 == 0 { pairs = Array(pairs.suffix(1)) }
+                } else if pairs[0].0 == 0 {
+                    pairs = Array(pairs.suffix(1))
+                }
             }
 
             for (i, (num, unit)) in pairs.enumerated() {
