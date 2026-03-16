@@ -361,6 +361,12 @@ def patch_sinegen_for_export(model):
     # Replace pow(sin,2) with mul in Snake activations
     _patch_snake_mul(model)
 
+    # Pre-round weights to float16 precision — ANE uses float16 internally,
+    # so rounding makes PyTorch reference match ANE's actual computation
+    with torch.no_grad():
+        for p in model.parameters():
+            p.data = p.data.half().float()
+
     # Set external phases on all SineGen instances
     def set_phases(module, phases):
         for m in module.modules():
