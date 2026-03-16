@@ -6,7 +6,7 @@ import KokoroTTS
 extension ModelBucket: ExpressibleByArgument {}
 
 @main
-struct KokoroSay: ParsableCommand {
+struct KokoroSay: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "kokoro-say",
         abstract: "Text-to-speech using KokoroTTS",
