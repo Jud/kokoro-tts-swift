@@ -2,10 +2,37 @@ import Foundation
 
 enum ModelDownloader {
     static let repo = "Jud/kokoro-tts-swift"
-    static let tag = "models-v1"
     static let asset = "kokoro-models.tar.gz"
 
-    static var assetURL: URL {
+    /// Fetches the latest release tag matching "models-*" from GitHub API.
+    static func latestModelTag() throws -> String {
+        let url = URL(string: "https://api.github.com/repos/\(repo)/releases")!
+        let sem = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var result: Result<String, Error> = .failure(URLError(.unknown))
+
+        let task = URLSession.shared.dataTask(with: url) { data, _, error in
+            if let error {
+                result = .failure(error)
+            } else if let data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                // Find the latest release with a "models-" tag
+                if let release = json.first(where: { ($0["tag_name"] as? String)?.hasPrefix("models-") == true }),
+                   let tag = release["tag_name"] as? String {
+                    result = .success(tag)
+                } else {
+                    result = .failure(URLError(.resourceUnavailable))
+                }
+            } else {
+                result = .failure(URLError(.cannotParseResponse))
+            }
+            sem.signal()
+        }
+        task.resume()
+        sem.wait()
+        return try result.get()
+    }
+
+    static func assetURL(tag: String) -> URL {
         URL(string: "https://github.com/\(repo)/releases/download/\(tag)/\(asset)")!
     }
 
@@ -13,8 +40,17 @@ enum ModelDownloader {
         let fm = FileManager.default
         try fm.createDirectory(at: directory, withIntermediateDirectories: true)
 
-        fputs("Downloading KokoroTTS models...\n", stderr)
-        fputs("  \(assetURL)\n", stderr)
+        fputs("Checking for latest models...\n", stderr)
+        let tag: String
+        do {
+            tag = try latestModelTag()
+        } catch {
+            fputs("  Could not fetch latest release, falling back to models-v1\n", stderr)
+            tag = "models-v1"
+        }
+        let url = assetURL(tag: tag)
+        fputs("Downloading KokoroTTS models (\(tag))...\n", stderr)
+        fputs("  \(url)\n", stderr)
 
         let tmpDir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try fm.createDirectory(at: tmpDir, withIntermediateDirectories: true)
@@ -27,7 +63,7 @@ enum ModelDownloader {
         let sem = DispatchSemaphore(value: 0)
         nonisolated(unsafe) var downloadResult: Result<Void, Error> = .success(())
 
-        let task = URLSession.shared.downloadTask(with: assetURL) { url, response, error in
+        let task = URLSession.shared.downloadTask(with: url) { url, response, error in
             if let error {
                 downloadResult = .failure(error)
             } else if let http = response as? HTTPURLResponse, http.statusCode != 200 {

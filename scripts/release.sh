@@ -4,15 +4,15 @@ set -euo pipefail
 # Release script for KokoroTTS CoreML models.
 #
 # Exports PyTorch → CoreML, compiles, packages with voice data,
-# and uploads as a GitHub release.
+# and uploads as a GitHub release with a date-based tag.
 #
 # Usage:
-#   ./scripts/release.sh <tag>           # e.g. ./scripts/release.sh models-v2
-#   ./scripts/release.sh <tag> --dry-run # export + package without uploading
+#   ./scripts/release.sh              # tag: models-YYYY-MM-DD
+#   ./scripts/release.sh --dry-run    # export + package without uploading
 
 REPO="Jud/kokoro-tts-swift"
-TAG="${1:?Usage: $0 <tag> [--dry-run]}"
-DRY_RUN="${2:-}"
+TAG="models-$(date +%Y-%m-%d)"
+DRY_RUN="${1:-}"
 EXPORT_DIR="models_export"
 TARBALL="kokoro-models.tar.gz"
 
@@ -68,18 +68,15 @@ echo "  Created $TARBALL ($SIZE)"
 if [ "$DRY_RUN" = "--dry-run" ]; then
     echo ""
     echo "Dry run — skipping upload. To upload manually:"
-    echo "  gh release create $TAG $TARBALL --repo $REPO --title 'Model weights ($TAG)'"
+    echo "  gh release create $TAG $TARBALL --repo $REPO --title 'Models ($TAG)'"
 else
     echo ""
     echo "Step 5: Uploading to GitHub release $TAG..."
     gh release create "$TAG" "$TARBALL" \
         --repo "$REPO" \
-        --title "Model weights ($TAG)" \
-        --notes "Kokoro-82M CoreML models and voice embeddings. Download: \`./scripts/download-models.sh\`"
+        --title "Models ($TAG)" \
+        --notes "Kokoro-82M CoreML models and voice embeddings."
     echo "  ✓ https://github.com/$REPO/releases/tag/$TAG"
-
-    echo ""
-    echo "⚠️  Update ModelDownloader.swift tag to \"$TAG\" if changed."
 fi
 
 echo ""
