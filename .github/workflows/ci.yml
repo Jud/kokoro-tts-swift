@@ -16,6 +16,9 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.2"
       - name: Check formatting
         run: swift format lint --strict --ignore-unparsable-files --recursive Sources Tests
 
@@ -24,6 +27,9 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.2"
       - uses: actions/cache@v4
         with:
           path: .build
@@ -39,6 +45,9 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.2"
       - uses: actions/cache@v4
         with:
           path: .build
