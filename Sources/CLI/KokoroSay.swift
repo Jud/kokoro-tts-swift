@@ -65,6 +65,30 @@ struct Say: AsyncParsableCommand {
     }
 
     mutating func run() async throws {
+        if stream && output == nil {
+            // Streaming needs async for the AVAudioPlayerNode await.
+            // speak() runs CoreML inference on its own internal Task.
+            try await executeStreaming()
+        } else {
+            // Run on a regular thread — CoreML inference overflows the
+            // cooperative thread pool's small stacks.
+            let say = self
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                let thread = Thread {
+                    do {
+                        try say.execute()
+                        cont.resume()
+                    } catch {
+                        cont.resume(throwing: error)
+                    }
+                }
+                thread.stackSize = 8 * 1024 * 1024  // 8MB stack for CoreML
+                thread.start()
+            }
+        }
+    }
+
+    private func execute() throws {
         let dir = modelDir.map { URL(fileURLWithPath: $0) } ?? ModelManager.defaultDirectory()
 
         if !ModelManager.modelsAvailable(at: dir) {
@@ -97,32 +121,51 @@ struct Say: AsyncParsableCommand {
             print("Loaded buckets: \(engine.activeBuckets.map(\.modelName).joined(separator: ", "))")
         }
 
-        if stream && output == nil {
-            try await streamPlayback(engine: engine, text: inputText)
-        } else {
-            let result = try engine.synthesize(
-                text: inputText, voice: voice, speed: speed,
-                bucket: bucket, rawAudio: raw
-            )
+        let result = try engine.synthesize(
+            text: inputText, voice: voice, speed: speed,
+            bucket: bucket, rawAudio: raw
+        )
 
-            if debug { printDebugInfo(result: result) }
+        if debug { printDebugInfo(result: result) }
 
-            let tag = result.bucket.map { " \($0.modelName)" } ?? ""
-            let stats = String(
-                format: "%.0fms synth, %.1fs audio, %.1fx RT",
-                result.synthesisTime * 1000, result.duration, result.realTimeFactor
-            )
-            print("[\(voice)\(tag)] \(stats)")
+        let tag = result.bucket.map { " \($0.modelName)" } ?? ""
+        let stats = String(
+            format: "%.0fms synth, %.1fs audio, %.1fx RT",
+            result.synthesisTime * 1000, result.duration, result.realTimeFactor
+        )
+        print("[\(voice)\(tag)] \(stats)")
 
-            if let output {
-                try writeWAV(samples: result.samples, to: output)
-                print("Wrote \(output)")
-            }
+        if let output {
+            try writeWAV(samples: result.samples, to: output)
+            print("Wrote \(output)")
+        }
 
-            if play || (output == nil && !debug) {
-                try playAudio(samples: result.samples)
+        if play || (output == nil && !debug) {
+            try playAudio(samples: result.samples)
+        }
+    }
+
+    private func executeStreaming() async throws {
+        let dir = modelDir.map { URL(fileURLWithPath: $0) } ?? ModelManager.defaultDirectory()
+
+        if !ModelManager.modelsAvailable(at: dir) {
+            try ModelDownloader.download(to: dir)
+            guard ModelManager.modelsAvailable(at: dir) else {
+                fputs("Download completed but models could not be loaded.\n", stderr)
+                throw ExitCode.failure
             }
         }
+
+        let engine = try KokoroEngine(modelDirectory: dir)
+        let inputText = try resolveText()
+
+        guard engine.availableVoices.contains(voice) else {
+            fputs("Unknown voice '\(voice)'. Available:\n", stderr)
+            for v in engine.availableVoices.sorted() { fputs("  \(v)\n", stderr) }
+            throw ExitCode.failure
+        }
+
+        try await streamPlayback(engine: engine, text: inputText)
     }
 
     // MARK: - Input
@@ -285,6 +328,10 @@ struct Update: AsyncParsableCommand {
 
     mutating func run() async throws {
         let dir = modelDir.map { URL(fileURLWithPath: $0) } ?? ModelManager.defaultDirectory()
+        if ModelDownloader.isUpToDate(at: dir) {
+            print("models are up to date.")
+            return
+        }
         try ModelDownloader.download(to: dir)
         guard ModelManager.modelsAvailable(at: dir) else {
             fputs("Download completed but models could not be loaded.\n", stderr)

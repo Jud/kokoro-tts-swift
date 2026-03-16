@@ -56,9 +56,15 @@ enum ModelDownloader {
         guard let latest = try? latestModelTag() else { return }
         if latest != installed {
             fputs(
-                "newer models available (\(installed) → \(latest)). run: kokoro-say --update-models\n", stderr
-            )
+                "newer models available (\(installed) → \(latest)). run: kokoro update\n",
+                stderr)
         }
+    }
+
+    static func isUpToDate(at directory: URL) -> Bool {
+        guard let installed = installedTag(at: directory) else { return false }
+        guard let latest = try? latestModelTag() else { return true }
+        return installed == latest
     }
 
     static func download(to directory: URL) throws {

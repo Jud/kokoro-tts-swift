@@ -530,7 +530,7 @@ public final class KokoroEngine: @unchecked Sendable {
         let clampedSpeed = Self.clampSpeed(speed)
 
         return AsyncStream { continuation in
-            let task = Task {
+            let thread = Thread {
                 let (_, mergedIds) = self.prepareChunks(text: text)
                 guard !mergedIds.isEmpty else {
                     continuation.finish()
@@ -541,7 +541,7 @@ public final class KokoroEngine: @unchecked Sendable {
                 var isFirst = true
 
                 for tokenIds in mergedIds {
-                    guard !Task.isCancelled else { break }
+                    if Thread.current.isCancelled { break }
 
                     do {
                         let styleVector = try self.voiceStore.embedding(
@@ -578,10 +578,8 @@ public final class KokoroEngine: @unchecked Sendable {
 
                 continuation.finish()
             }
-
-            continuation.onTermination = { _ in
-                task.cancel()
-            }
+            thread.stackSize = 8 * 1024 * 1024  // CoreML needs deep stacks
+            thread.start()
         }
     }
 
