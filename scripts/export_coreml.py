@@ -155,6 +155,13 @@ class CustomSTFT(nn.Module):
         self.register_buffer("weight_backward_imag",
                              torch.from_numpy(idft_sin * inv_window).float().unsqueeze(1))
 
+        # Fused inverse weight: cat([W_real, -W_imag], dim=0)
+        # Eliminates separate subtraction and reduces two conv_transpose1d to one
+        fused_real = torch.from_numpy(idft_cos * inv_window).float().unsqueeze(1)
+        fused_imag = -torch.from_numpy(idft_sin * inv_window).float().unsqueeze(1)
+        self.register_buffer("weight_backward_fused",
+                             torch.cat([fused_real, fused_imag], dim=0))
+
     def transform(self, waveform):
         if self.center:
             pad_len = self.n_fft // 2
@@ -173,11 +180,9 @@ class CustomSTFT(nn.Module):
     def inverse(self, magnitude, phase, length=None):
         real_part = magnitude * torch.cos(phase)
         imag_part = magnitude * torch.sin(phase)
-        real_rec = F.conv_transpose1d(real_part, self.weight_backward_real,
+        combined = torch.cat([real_part, imag_part], dim=1)
+        waveform = F.conv_transpose1d(combined, self.weight_backward_fused,
                                       bias=None, stride=self.hop_length, padding=0)
-        imag_rec = F.conv_transpose1d(imag_part, self.weight_backward_imag,
-                                      bias=None, stride=self.hop_length, padding=0)
-        waveform = real_rec - imag_rec
         if self.center:
             pad_len = self.n_fft // 2
             waveform = waveform[..., pad_len:-pad_len]
