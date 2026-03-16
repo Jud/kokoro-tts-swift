@@ -365,6 +365,16 @@ def patch_sinegen_for_export(model):
         return (1 + gamma) * self.norm(x).half().float() + beta
     AdaIN1d.forward = _fp16_norm_forward
 
+    # Eliminate dead noise in SourceModuleHnNSF — noi_source is never used
+    # in the generator, and randn_like in the trace creates unnecessary ops
+    from kokoro.istftnet import SourceModuleHnNSF
+    def _no_noise_source_forward(self, x):
+        with torch.no_grad():
+            sine_wavs, uv, _ = self.l_sin_gen(x)
+        sine_merge = self.l_tanh(self.l_linear(sine_wavs))
+        return sine_merge, torch.zeros_like(uv), uv
+    SourceModuleHnNSF.forward = _no_noise_source_forward
+
     # Pre-round weights AND buffers to float16 precision — ANE uses float16
     # internally, so rounding makes PyTorch reference match ANE's actual computation
     with torch.no_grad():
