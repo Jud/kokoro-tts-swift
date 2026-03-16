@@ -144,6 +144,14 @@ class CustomSTFT(nn.Module):
         self.register_buffer("weight_forward_imag",
                              torch.from_numpy(forward_imag).float().unsqueeze(1))
 
+        # Fused forward weight: cat([W_real, W_imag], dim=0)
+        # Single conv1d produces both real and imag in one pass
+        self.register_buffer("weight_forward_fused",
+                             torch.cat([
+                                 torch.from_numpy(forward_real).float().unsqueeze(1),
+                                 torch.from_numpy(forward_imag).float().unsqueeze(1),
+                             ], dim=0))
+
         inv_scale = 1.0 / self.n_fft
         angle_t = 2 * np.pi * np.outer(n, k) / self.n_fft
         idft_cos = np.cos(angle_t).T
@@ -167,10 +175,11 @@ class CustomSTFT(nn.Module):
             pad_len = self.n_fft // 2
             waveform = F.pad(waveform, (pad_len, pad_len), mode=self.pad_mode)
         x = waveform.unsqueeze(1)
-        real_out = F.conv1d(x, self.weight_forward_real, bias=None,
-                            stride=self.hop_length, padding=0)
-        imag_out = F.conv1d(x, self.weight_forward_imag, bias=None,
-                            stride=self.hop_length, padding=0)
+        # Single fused conv1d for both real and imag
+        ri = F.conv1d(x, self.weight_forward_fused, bias=None,
+                      stride=self.hop_length, padding=0)
+        real_out = ri[:, :self.freq_bins, :]
+        imag_out = ri[:, self.freq_bins:, :]
         magnitude = torch.sqrt(real_out * real_out + imag_out * imag_out + 1e-14)
         phase = torch.atan2(imag_out, real_out)
         correction_mask = (imag_out == 0) & (real_out < 0)
