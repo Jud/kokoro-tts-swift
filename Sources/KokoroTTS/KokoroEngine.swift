@@ -4,6 +4,11 @@ import CoreML
 import Foundation
 import os
 
+// AVAudioPCMBuffer is safe to send across concurrency boundaries when each
+// buffer is freshly allocated and transferred (not shared). The Swift 6.2.1
+// toolchain lacks the conformance that 6.2.3 provides.
+extension AVAudioPCMBuffer: @unchecked @retroactive Sendable {}
+
 /// Model size bucket for automatic selection based on token count.
 public enum ModelBucket: String, CaseIterable, Sendable, Comparable {
     /// Short utterances — 124 tokens max (~5s audio).
@@ -497,7 +502,7 @@ public final class KokoroEngine: @unchecked Sendable {
     /// audioEngine.connect(playerNode, to: audioEngine.mainMixerNode,
     ///                     format: KokoroEngine.audioFormat)
     /// ```
-    nonisolated(unsafe) public static let audioFormat = AVAudioFormat(
+    public static let audioFormat = AVAudioFormat(
         standardFormatWithSampleRate: Double(sampleRate), channels: 1)!
 
     /// Stream synthesized audio as playback-ready buffers.
