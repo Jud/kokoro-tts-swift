@@ -358,7 +358,7 @@ final class Lexicon {  // swiftlint:disable:this type_body_length
         if let phonemeDict = phoneticString as? [String: String?] {
             var t = getParentTag(tag, token: w)
             if let ctx = ctx, ctx.futureVowel == nil, phonemeDict["None"] != nil {
-                t = "XX"
+                t = "None"
             }
             phoneticString = phonemeDict[t ?? "DEFAULT"] ?? phonemeDict["DEFAULT"]
         }
@@ -377,11 +377,15 @@ final class Lexicon {  // swiftlint:disable:this type_body_length
 
     private func getParentTag(_ tag: NLTag?, token: String?) -> String? {
         guard let tag = tag else { return "XX" }
-        let pennTag = pennTag(for: tag, token: token)
-        if pennTag.hasPrefix("VB") { return "VERB" }
-        if pennTag.hasPrefix("NN") { return "NOUN" }
-        if pennTag.hasPrefix("ADV") || pennTag.hasPrefix("RB") { return "ADV" }
-        if pennTag.hasPrefix("ADJ") || pennTag.hasPrefix("JJ") { return "ADJ" }
+        let pt = pennTag(for: tag, token: token)
+        // Some words have tag-specific pronunciations (e.g. "that" DT vs DEFAULT,
+        // "read" VBD vs VBP). Return the specific Penn tag when known, falling
+        // back to parent categories.
+        if ["DT", "VBD", "VBN", "VBP"].contains(pt) { return pt }
+        if pt.hasPrefix("VB") { return "VERB" }
+        if pt.hasPrefix("NN") { return "NOUN" }
+        if pt.hasPrefix("ADV") || pt.hasPrefix("RB") { return "ADV" }
+        if pt.hasPrefix("ADJ") || pt.hasPrefix("JJ") { return "ADJ" }
         return "XX"
     }
 

@@ -410,6 +410,10 @@ final class EnglishG2P {
                 {
                     if let val = EnglishG2P.punctuationTagPhonemes[token.text] {
                         token.phonemes = val
+                    } else if token.tag == .openQuote {
+                        token.phonemes = "\u{201C}"
+                    } else if token.tag == .closeQuote {
+                        token.phonemes = "\u{201D}"
                     } else {
                         token.phonemes = token.text.filter {
                             EnglishG2P.punctuations.contains($0)
