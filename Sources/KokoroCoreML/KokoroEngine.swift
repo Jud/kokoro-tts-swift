@@ -1,0 +1,742 @@
+@preconcurrency import AVFoundation
+import CoreML
+import Foundation
+import os
+
+/// Model size bucket for automatic selection based on token count.
+enum ModelBucket: String, CaseIterable, Sendable, Comparable {
+    /// Short utterances — 124 tokens max (~5s audio).
+    case small
+    /// Medium utterances — 242 tokens max (~10s audio).
+    case medium
+
+    /// CoreML model bundle name (without .mlmodelc extension).
+    var modelName: String {
+        switch self {
+        case .small: "kokoro_21_5s"
+        case .medium: "kokoro_24_10s"
+        }
+    }
+
+    /// Frontend model bundle name.
+    var frontendModelName: String { modelName + "_frontend" }
+
+    /// Backend model bundle name.
+    var backendModelName: String { modelName + "_backend" }
+
+    /// Maximum input token count for this bucket.
+    var maxTokens: Int {
+        switch self {
+        case .small: 124
+        case .medium: 242
+        }
+    }
+
+    /// Select the smallest bucket that fits the token count.
+    /// Returns nil if no bucket is large enough.
+    ///
+    /// Assumes `available` is sorted ascending (which `activeBuckets` always is).
+    static func select(forTokenCount count: Int, available: [ModelBucket]) -> ModelBucket? {
+        assert(available == available.sorted(), "available must be sorted ascending")
+        return available.first { count <= $0.maxTokens }
+    }
+
+    static func < (lhs: ModelBucket, rhs: ModelBucket) -> Bool {
+        lhs.maxTokens < rhs.maxTokens
+    }
+}
+
+/// High-quality text-to-speech engine using Kokoro-82M CoreML models.
+///
+/// Uses split frontend (predictor, CPU) + backend (decoder, GPU) CoreML
+/// models per bucket size for fast on-device inference.
+///
+/// ```swift
+/// let engine = try KokoroEngine(modelDirectory: myModelPath)
+/// // warmup runs automatically in the background
+/// let result = try engine.synthesize(text: "Hello world", voice: "af_heart")
+/// // result.samples contains 24kHz mono PCM float audio
+/// ```
+public final class KokoroEngine: @unchecked Sendable {
+
+    // MARK: - Model Management
+
+    /// Default directory for model storage.
+    ///
+    /// Returns `~/Library/Application Support/<bundleIdentifier>/models/kokoro/`.
+    /// CoreML caches device-specialized compilations at this fixed path.
+    public static var defaultModelDirectory: URL {
+        ModelManager.defaultDirectory()
+    }
+
+    /// Whether models are downloaded at the default directory.
+    public static var isDownloaded: Bool {
+        ModelManager.modelsAvailable(at: defaultModelDirectory)
+    }
+
+    /// Whether models are downloaded at a specific directory.
+    public static func isDownloaded(at directory: URL) -> Bool {
+        ModelManager.modelsAvailable(at: directory)
+    }
+
+    /// Download models to the default directory.
+    ///
+    /// Fetches the latest model release from GitHub (~640MB), extracts it,
+    /// and installs to ``defaultModelDirectory``. Safe to call if models
+    /// already exist — checks for updates and skips if current.
+    ///
+    /// - Important: This method blocks the calling thread. Do not call from
+    ///   the main thread in a UI application.
+    /// - Parameter progress: Called with download progress (0.0–1.0).
+    /// - Throws: On network or extraction failure.
+    public static func download(
+        progress: (@Sendable (Double) -> Void)? = nil
+    ) throws {
+        try Self.download(to: defaultModelDirectory, progress: progress)
+    }
+
+    /// Download models to a specific directory.
+    ///
+    /// - Important: This method blocks the calling thread. Do not call from
+    ///   the main thread in a UI application.
+    /// - Parameters:
+    ///   - directory: Where to install models.
+    ///   - progress: Called with download progress (0.0–1.0).
+    /// - Throws: On network or extraction failure.
+    public static func download(
+        to directory: URL,
+        progress: (@Sendable (Double) -> Void)? = nil
+    ) throws {
+        try ModelDownloader.download(to: directory, progress: progress)
+    }
+
+    // MARK: - Internal Constants
+
+    /// Output sample rate in Hz (24kHz).
+    public static let sampleRate = 24_000
+
+    /// Audio samples per duration frame (from model.mil: total_frames * 600).
+    static let hopSize = 600
+
+    /// Valid speed range for synthesis.
+    static let speedRange: ClosedRange<Float> = 0.5...2.0
+
+    /// Number of random phase channels for the iSTFTNet vocoder.
+    private static let numPhases = 9
+
+    /// Style content dimension (first half of the full 256-dim style vector).
+    private static let sContentDim = VoiceStore.styleDim / 2
+
+    /// Safety margin subtracted from max bucket tokens when chunking phonemes.
+    private static let tokenPadding = 7
+
+    private enum Feature {
+        static let inputIds = "input_ids"
+        static let attentionMask = "attention_mask"
+        static let refS = "ref_s"
+        static let randomPhases = "random_phases"
+        static let audio = "audio"
+        static let audioLength = "audio_length_samples"
+        static let predDurClamped = "pred_dur_clamped"
+        static let speed = "speed"
+        static let asr = "asr"
+        static let f0Pred = "F0_pred"
+        static let nPred = "N_pred"
+        static let sContent = "s_content"
+        static let har = "har"
+    }
+
+    /// Per-bucket CoreML models and pre-allocated buffers.
+    private struct BucketResources {
+        let frontend: MLModel  // CPU_ONLY
+        let backend: MLModel  // .all (GPU in practice)
+        let inputIds: MLMultiArray
+        let mask: MLMultiArray
+        let refS: MLMultiArray
+        let sContent: MLMultiArray
+        let randomPhases: MLMultiArray
+        let speed: MLMultiArray
+    }
+
+    private static let logger = Logger(
+        subsystem: "com.kokorocoreml", category: "KokoroEngine")
+
+    /// Threshold in seconds above which model.prediction() is considered slow
+    /// (likely GPU fallback to CPU).
+    private static let slowPredictionThreshold: TimeInterval = 0.150
+
+    private let g2p: EnglishG2P
+    private let g2pLock = NSLock()
+    private let synthesizeLock = NSLock()
+    private let tokenizer: Tokenizer
+    private let voiceStore: VoiceStore
+    private let bucketResources: [ModelBucket: BucketResources]
+    private let _isReady = OSAllocatedUnfairLock(initialState: false)
+
+    /// Which buckets are loaded and available for synthesis (sorted ascending).
+    let activeBuckets: [ModelBucket]
+
+    /// Whether the engine has completed background warmup.
+    ///
+    /// Synthesis works before warmup completes — the first call will just be
+    /// slower. Use this to drive loading indicators in your UI.
+    public var isReady: Bool { _isReady.withLock { $0 } }
+
+    /// Creates a KokoroEngine from cached models.
+    ///
+    /// Loads all available model buckets from the directory. At least one
+    /// frontend+backend `.mlmodelc` pair and a `voices/` directory must be present.
+    ///
+    /// - Parameter modelDirectory: Path containing frontend/backend `.mlmodelc`
+    ///   pairs and a `voices/` directory with voice embedding JSON files.
+    /// - Throws: ``KokoroError/modelsNotAvailable(_:)`` if no models found.
+    public init(modelDirectory: URL) throws {
+        guard ModelManager.modelsAvailable(at: modelDirectory) else {
+            throw KokoroError.modelsNotAvailable(modelDirectory)
+        }
+
+        self.g2p = EnglishG2P(british: false)
+
+        let vocabURL = modelDirectory.appendingPathComponent("vocab_index.json")
+        if FileManager.default.fileExists(atPath: vocabURL.path) {
+            self.tokenizer = try Tokenizer.load(from: vocabURL)
+        } else {
+            self.tokenizer = try Tokenizer.loadFromBundle()
+        }
+
+        self.voiceStore = try VoiceStore(directory: modelDirectory.appendingPathComponent("voices"))
+
+        let feConfig = MLModelConfiguration()
+        feConfig.computeUnits = .cpuOnly
+        let beConfig = MLModelConfiguration()
+        beConfig.computeUnits = .all
+
+        var resources: [ModelBucket: BucketResources] = [:]
+        for bucket in ModelBucket.allCases {
+            let feURL = modelDirectory.appendingPathComponent(
+                bucket.frontendModelName + ".mlmodelc")
+            let beURL = modelDirectory.appendingPathComponent(
+                bucket.backendModelName + ".mlmodelc")
+            guard FileManager.default.fileExists(atPath: feURL.path),
+                FileManager.default.fileExists(atPath: beURL.path)
+            else { continue }
+            do {
+                let maxTokens = bucket.maxTokens
+
+                let frontend = try MLModel(contentsOf: feURL, configuration: feConfig)
+                let backend = try MLModel(contentsOf: beURL, configuration: beConfig)
+
+                let res = BucketResources(
+                    frontend: frontend,
+                    backend: backend,
+                    inputIds: try MLMultiArray(
+                        shape: [1, maxTokens as NSNumber], dataType: .int32),
+                    mask: try MLMultiArray(
+                        shape: [1, maxTokens as NSNumber], dataType: .int32),
+                    refS: try MLMultiArray(
+                        shape: [1, VoiceStore.styleDim as NSNumber], dataType: .float32),
+                    sContent: try MLMultiArray(
+                        shape: [1, Self.sContentDim as NSNumber], dataType: .float32),
+                    randomPhases: try MLMultiArray(
+                        shape: [1, Self.numPhases as NSNumber], dataType: .float32),
+                    speed: try MLMultiArray(shape: [1], dataType: .float32)
+                )
+                resources[bucket] = res
+                Self.logger.info("Loaded \(bucket.modelName) frontend+backend (\(maxTokens) tokens)")
+            } catch {
+                Self.logger.warning("Failed to load \(bucket.modelName): \(error)")
+            }
+        }
+
+        guard !resources.isEmpty else {
+            throw KokoroError.modelsNotAvailable(modelDirectory)
+        }
+
+        self.bucketResources = resources
+        self.activeBuckets = ModelBucket.allCases.filter { resources[$0] != nil }
+
+        // Auto-warmup in background — primes CoreML's on-device compilation
+        // cache so the first real synthesis call is fast. If synthesize() is
+        // called before this completes, it just waits on synthesizeLock.
+        let engine = self
+        let thread = Thread {
+            engine.warmUp()
+            engine._isReady.withLock { $0 = true }
+        }
+        thread.stackSize = 2 * 1024 * 1024
+        thread.start()
+    }
+
+    // MARK: - Synthesis
+
+    /// Synthesize text to PCM audio samples.
+    ///
+    /// Splits text into sentences, merges consecutive short ones that fit in a
+    /// single bucket for better prosody, then synthesizes each chunk.
+    ///
+    /// - Parameters:
+    ///   - text: Text to speak (any length).
+    ///   - voice: Voice preset name (e.g. `"af_heart"`, `"am_adam"`).
+    ///     See ``availableVoices`` for valid names.
+    ///   - speed: Speech rate multiplier (0.5 = half speed, 2.0 = double speed).
+    ///     Clamped to 0.5...2.0. Default is 1.0.
+    /// - Returns: Synthesis result with PCM samples and metadata.
+    /// - Throws: ``KokoroError/voiceNotFound(_:)`` if the voice doesn't exist.
+    public func synthesize(
+        text: String, voice: String, speed: Float = 1.0
+    ) throws -> SynthesisResult {
+        let t0 = CFAbsoluteTimeGetCurrent()
+        let clampedSpeed = Self.clampSpeed(speed)
+        let (fullPhonemes, mergedIds) = prepareChunks(text: text)
+
+        return try synthesizeTokens(
+            phonemes: fullPhonemes, mergedIds: mergedIds, voice: voice,
+            speed: clampedSpeed, startTime: t0)
+    }
+
+    /// Synthesize pre-phonemized IPA text to PCM audio samples.
+    ///
+    /// Skips the G2P pipeline entirely — pass IPA phoneme strings directly.
+    /// Useful for fine-grained pronunciation control or pre-processed text.
+    ///
+    /// - Parameters:
+    ///   - ipa: IPA phoneme string (e.g. `"hˈɛloʊ wˈɜːld"`).
+    ///   - voice: Voice preset name.
+    ///   - speed: Speech rate multiplier (0.5–2.0). Default 1.0.
+    /// - Returns: Synthesis result with PCM samples and metadata.
+    /// - Throws: ``KokoroError/voiceNotFound(_:)`` if the voice doesn't exist.
+    public func synthesize(
+        ipa: String, voice: String, speed: Float = 1.0
+    ) throws -> SynthesisResult {
+        let t0 = CFAbsoluteTimeGetCurrent()
+        let clampedSpeed = Self.clampSpeed(speed)
+        let mergedIds = chunkAndTokenize(ipa)
+
+        return try synthesizeTokens(
+            phonemes: ipa, mergedIds: mergedIds, voice: voice,
+            speed: clampedSpeed, startTime: t0)
+    }
+
+    private func synthesizeTokens(
+        phonemes: String, mergedIds: [[Int]], voice: String,
+        speed: Float, startTime: CFAbsoluteTime
+    ) throws -> SynthesisResult {
+
+        var allSamples: [Float] = []
+        var allDurations: [Int] = []
+        var totalTokens = 0
+        var selectedBucket: ModelBucket?
+
+        for tokenIds in mergedIds {
+            totalTokens += tokenIds.count
+
+            let styleVector = try voiceStore.embedding(for: voice, tokenCount: tokenIds.count - 2)
+
+            let useBucket =
+                ModelBucket.select(
+                    forTokenCount: tokenIds.count, available: activeBuckets)
+                ?? activeBuckets.last!
+            selectedBucket = useBucket
+
+            let (samples, durations) = try synthesizeChunk(
+                tokenIds: tokenIds, styleVector: styleVector, speed: speed,
+                bucket: useBucket)
+
+            allSamples.append(contentsOf: samples)
+            allDurations.append(contentsOf: durations)
+        }
+
+        let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+        return SynthesisResult(
+            samples: allSamples, phonemes: phonemes,
+            tokenDurations: allDurations, tokenCount: totalTokens,
+            synthesisTime: elapsed, bucket: selectedBucket)
+    }
+
+    // MARK: - Voices
+
+    /// Available voice preset names.
+    public var availableVoices: [String] {
+        voiceStore.availableVoices
+    }
+
+    // MARK: - Warmup
+
+    /// Pre-warm the CoreML compilation cache for all loaded buckets.
+    private func warmUp() {
+        for bucket in activeBuckets {
+            do {
+                let dummyTokens = [Int](repeating: 0, count: bucket.maxTokens)
+                let dummyStyle = [Float](repeating: 0, count: VoiceStore.styleDim)
+                _ = try synthesizeChunk(
+                    tokenIds: dummyTokens, styleVector: dummyStyle, speed: 1.0,
+                    bucket: bucket)
+            } catch {
+                Self.logger.warning(
+                    "Warmup failed for \(bucket.modelName) (non-fatal): \(error.localizedDescription)"
+                )
+            }
+        }
+    }
+
+    // MARK: - Private
+
+    private static func clampSpeed(_ speed: Float) -> Float {
+        min(max(speed, speedRange.lowerBound), speedRange.upperBound)
+    }
+
+    /// Phonemize, chunk, tokenize, and merge text into batches of token IDs.
+    private func prepareChunks(text: String) -> (phonemes: String, mergedTokenIds: [[Int]]) {
+        let paragraphs = text.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        let fullPhonemes: String
+        if paragraphs.count <= 1 {
+            fullPhonemes = lockedPhonemize(text)
+        } else {
+            fullPhonemes = paragraphs.map { lockedPhonemize($0) }.joined(separator: " ")
+        }
+
+        return (fullPhonemes, chunkAndTokenize(fullPhonemes))
+    }
+
+    /// Chunk phonemes, tokenize each chunk, then merge adjacent short chunks.
+    private func chunkAndTokenize(_ phonemes: String) -> [[Int]] {
+        let maxTokens = activeBuckets.last!.maxTokens
+        let chunks = Self.chunkPhonemes(phonemes, maxPhonemes: maxTokens - Self.tokenPadding)
+        let tokenized = chunks.map { tokenizer.encode($0) }
+
+        var mergedIds: [[Int]] = []
+        var currentIds: [Int] = []
+        for ids in tokenized {
+            let combined =
+                currentIds.isEmpty
+                ? ids
+                : Array(currentIds.dropLast()) + Array(ids.dropFirst())
+            if combined.count <= maxTokens {
+                currentIds = combined
+            } else {
+                if !currentIds.isEmpty { mergedIds.append(currentIds) }
+                currentIds = ids
+            }
+        }
+        if !currentIds.isEmpty { mergedIds.append(currentIds) }
+        return mergedIds
+    }
+
+    private func lockedPhonemize(_ text: String) -> String {
+        g2pLock.lock()
+        defer { g2pLock.unlock() }
+        let (phonemes, _) = g2p.phonemize(text: text)
+        return phonemes
+    }
+
+    /// Chunk a phoneme string into pieces that each fit within `maxPhonemes` characters.
+    ///
+    /// Uses a waterfall punctuation search matching the reference implementation:
+    /// first try to split at sentence-ending punctuation (`!.?…`), then at
+    /// clause boundaries (`:;`), then at phrase boundaries (`,—`), then at spaces.
+    static func chunkPhonemes(_ phonemes: String, maxPhonemes: Int) -> [String] {
+        guard phonemes.count > maxPhonemes else { return [phonemes] }
+
+        let waterfallSets: [Set<Character>] = [
+            Set("!.?\u{2026}"),  // sentence endings
+            Set(":;"),  // clause boundaries
+            Set(",\u{2014}"),  // phrase boundaries
+        ]
+
+        var chunks: [String] = []
+        var remaining = phonemes[...]
+
+        while remaining.count > maxPhonemes {
+            let window = remaining.prefix(maxPhonemes)
+            var splitIndex: String.Index?
+
+            for punctSet in waterfallSets {
+                if let idx = window.lastIndex(where: { punctSet.contains($0) }) {
+                    splitIndex = window.index(after: idx)
+                    break
+                }
+            }
+
+            if splitIndex == nil {
+                if let idx = window.lastIndex(of: " ") {
+                    splitIndex = window.index(after: idx)
+                }
+            }
+
+            let cut = splitIndex ?? window.endIndex
+            let chunk = String(remaining[remaining.startIndex..<cut])
+                .trimmingCharacters(in: .whitespaces)
+            if !chunk.isEmpty { chunks.append(chunk) }
+            remaining = remaining[cut...]
+        }
+
+        let tail = String(remaining).trimmingCharacters(in: .whitespaces)
+        if !tail.isEmpty { chunks.append(tail) }
+
+        return chunks
+    }
+
+    private func synthesizeChunk(
+        tokenIds: [Int],
+        styleVector: [Float],
+        speed: Float,
+        bucket: ModelBucket
+    ) throws -> (samples: [Float], durations: [Int]) {
+        guard let res = bucketResources[bucket] else {
+            throw KokoroError.inferenceFailed("Bucket \(bucket.modelName) not loaded")
+        }
+        guard tokenIds.count <= bucket.maxTokens else {
+            throw KokoroError.textTooLong(
+                tokenCount: tokenIds.count, maxTokens: bucket.maxTokens)
+        }
+
+        synthesizeLock.lock()
+        defer { synthesizeLock.unlock() }
+
+        // --- Frontend: predictor + GeneratorFrontEnd (CPU) ---
+        MLArrayHelpers.fillTokenInputs(
+            from: tokenIds, into: res.inputIds, mask: res.mask, maxLength: bucket.maxTokens)
+        MLArrayHelpers.fillStyleArray(from: styleVector, into: res.refS)
+        res.speed[0] = speed as NSNumber
+
+        let phasePtr = res.randomPhases.dataPointer.assumingMemoryBound(to: Float.self)
+        for i in 0..<Self.numPhases {
+            phasePtr[i] = Float.random(in: 0..<(2 * .pi))
+        }
+
+        let frontendInput = try MLDictionaryFeatureProvider(dictionary: [
+            Feature.inputIds: MLFeatureValue(multiArray: res.inputIds),
+            Feature.attentionMask: MLFeatureValue(multiArray: res.mask),
+            Feature.refS: MLFeatureValue(multiArray: res.refS),
+            Feature.speed: MLFeatureValue(multiArray: res.speed),
+            Feature.randomPhases: MLFeatureValue(multiArray: res.randomPhases),
+        ])
+
+        let feOutput = try res.frontend.prediction(from: frontendInput)
+
+        guard let asr = feOutput.featureValue(for: Feature.asr)?.multiArrayValue,
+            let f0Pred = feOutput.featureValue(for: Feature.f0Pred)?.multiArrayValue,
+            let nPred = feOutput.featureValue(for: Feature.nPred)?.multiArrayValue,
+            let har = feOutput.featureValue(for: Feature.har)?.multiArrayValue
+        else {
+            throw KokoroError.inferenceFailed("Missing frontend outputs")
+        }
+
+        // --- Backend: DecoderBackEnd (GPU, ~102ms) ---
+        MLArrayHelpers.fillStyleArray(from: styleVector, into: res.sContent, dim: Self.sContentDim)
+
+        let backendInput = try MLDictionaryFeatureProvider(dictionary: [
+            Feature.asr: MLFeatureValue(multiArray: asr),
+            Feature.f0Pred: MLFeatureValue(multiArray: f0Pred),
+            Feature.nPred: MLFeatureValue(multiArray: nPred),
+            Feature.sContent: MLFeatureValue(multiArray: res.sContent),
+            Feature.har: MLFeatureValue(multiArray: har),
+        ])
+
+        let backendStart = CFAbsoluteTimeGetCurrent()
+        let beOutput = try res.backend.prediction(from: backendInput)
+        let backendElapsed = CFAbsoluteTimeGetCurrent() - backendStart
+
+        if backendElapsed > Self.slowPredictionThreshold {
+            let ms = String(format: "%.0f", backendElapsed * 1_000)
+            Self.logger.warning(
+                "\(bucket.modelName) prediction took \(ms)ms (possible GPU fallback to CPU)")
+        }
+
+        guard let audio = beOutput.featureValue(for: Feature.audio)?.multiArrayValue else {
+            throw KokoroError.inferenceFailed("Missing audio output")
+        }
+
+        // Durations and audio length come from frontend
+        let durations: [Int]
+        if let predDur = feOutput.featureValue(for: Feature.predDurClamped)?.multiArrayValue {
+            durations = (0..<min(predDur.count, tokenIds.count)).map { predDur[$0].intValue }
+        } else {
+            durations = []
+        }
+
+        let validSamples: Int
+        if let lengthArray = feOutput.featureValue(for: Feature.audioLength)?.multiArrayValue,
+            lengthArray[0].intValue > 0, lengthArray[0].intValue <= audio.count
+        {
+            validSamples = lengthArray[0].intValue
+        } else if !durations.isEmpty {
+            let totalFrames = durations.reduce(0, +)
+            validSamples = min(totalFrames * Self.hopSize + 600, audio.count)
+        } else {
+            validSamples = audio.count
+        }
+
+        let samples = MLArrayHelpers.extractFloats(from: audio, maxCount: validSamples)
+        return (samples, durations)
+    }
+
+    // MARK: - Streaming
+
+    /// Audio format for streaming buffers (24kHz, mono, float32).
+    ///
+    /// Use this to configure your `AVAudioEngine` for playback:
+    /// ```swift
+    /// audioEngine.connect(playerNode, to: audioEngine.mainMixerNode,
+    ///                     format: KokoroEngine.audioFormat)
+    /// ```
+    public static let audioFormat = AVAudioFormat(
+        standardFormatWithSampleRate: Double(sampleRate), channels: 1)!
+
+    /// Stream synthesized audio as playback-ready buffers.
+    ///
+    /// Automatically chunks long text and yields each segment as an
+    /// `AVAudioPCMBuffer` ready for `AVAudioPlayerNode.scheduleBuffer()`.
+    /// Consumers just iterate and play — no manual chunking or PCM handling needed.
+    ///
+    /// ```swift
+    /// for await event in try engine.speak("Long text...", voice: "af_heart") {
+    ///     switch event {
+    ///     case .audio(let buffer): playerNode.scheduleBuffer(buffer)
+    ///     case .chunkFailed(let error): print("Chunk failed: \(error)")
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// - Parameters:
+    ///   - text: Text to speak (any length — automatically chunked).
+    ///   - voice: Voice preset name (e.g. `"af_heart"`).
+    ///   - speed: Speech rate multiplier (0.5–2.0). Default 1.0.
+    /// - Returns: Stream of ``SpeakEvent`` values — audio buffers or chunk errors.
+    /// - Throws: ``KokoroError/voiceNotFound(_:)`` if the voice doesn't exist.
+    public func speak(
+        _ text: String,
+        voice: String,
+        speed: Float = 1.0
+    ) throws -> AsyncStream<SpeakEvent> {
+        guard availableVoices.contains(voice) else {
+            throw KokoroError.voiceNotFound(voice)
+        }
+
+        let clampedSpeed = Self.clampSpeed(speed)
+        let (_, mergedIds) = prepareChunks(text: text)
+        guard !mergedIds.isEmpty else { return AsyncStream { $0.finish() } }
+
+        return AsyncStream { continuation in
+            let thread = Thread {
+                let format = Self.audioFormat
+
+                for tokenIds in mergedIds {
+                    if Thread.current.isCancelled { break }
+
+                    do {
+                        let styleVector = try self.voiceStore.embedding(
+                            for: voice, tokenCount: tokenIds.count - 2)
+                        let bucket =
+                            ModelBucket.select(
+                                forTokenCount: tokenIds.count, available: self.activeBuckets)
+                            ?? self.activeBuckets.last!
+
+                        let (samples, _) = try self.synthesizeChunk(
+                            tokenIds: tokenIds, styleVector: styleVector,
+                            speed: clampedSpeed, bucket: bucket)
+
+                        if let buffer = Self.makePCMBuffer(from: samples, format: format) {
+                            continuation.yield(.audio(buffer))
+                        }
+                    } catch {
+                        Self.logger.error(
+                            "Streaming chunk failed: \(error.localizedDescription)")
+                        continuation.yield(.chunkFailed(error))
+                    }
+                }
+
+                continuation.finish()
+            }
+            thread.stackSize = 2 * 1024 * 1024  // CoreML needs deep stacks
+            nonisolated(unsafe) let unsafeThread = thread
+            continuation.onTermination = { _ in unsafeThread.cancel() }
+            thread.start()
+        }
+    }
+
+    /// Convert float samples to a playback-ready `AVAudioPCMBuffer`.
+    public static func makePCMBuffer(
+        from samples: [Float], format: AVAudioFormat
+    ) -> AVAudioPCMBuffer? {
+        guard !samples.isEmpty else { return nil }
+        guard
+            let buffer = AVAudioPCMBuffer(
+                pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count))
+        else { return nil }
+        buffer.frameLength = AVAudioFrameCount(samples.count)
+        samples.withUnsafeBufferPointer { src in
+            guard let dst = buffer.floatChannelData?[0], let srcBase = src.baseAddress
+            else { return }
+            dst.update(from: srcBase, count: samples.count)
+        }
+        return buffer
+    }
+
+}
+
+// MARK: - SpeakEvent
+
+/// Events yielded by ``KokoroEngine/speak(_:voice:speed:)``.
+///
+/// Most events are ``audio(_:)`` buffers ready for playback. If a chunk
+/// fails mid-stream, ``chunkFailed(_:)`` is yielded instead and the stream
+/// continues with the next chunk — consumers decide how to handle the gap.
+public enum SpeakEvent: @unchecked Sendable {
+    /// A playback-ready audio buffer for one synthesized chunk.
+    case audio(AVAudioPCMBuffer)
+    /// A chunk failed to synthesize. The stream continues with remaining chunks.
+    case chunkFailed(any Error)
+}
+
+// MARK: - SynthesisResult
+
+/// Result from a text-to-speech synthesis call.
+public struct SynthesisResult: Sendable {
+    /// 24kHz mono PCM float samples.
+    public let samples: [Float]
+
+    /// IPA phoneme string produced by the G2P pipeline.
+    public let phonemes: String
+
+    /// Per-token predicted durations in audio frames.
+    let tokenDurations: [Int]
+
+    /// Number of input tokens processed.
+    public let tokenCount: Int
+
+    /// Wall-clock synthesis time in seconds.
+    public let synthesisTime: TimeInterval
+
+    /// Which model bucket was used (last sentence's bucket if multi-sentence).
+    let bucket: ModelBucket?
+
+    /// Audio duration in seconds.
+    public var duration: TimeInterval {
+        Double(samples.count) / Double(KokoroEngine.sampleRate)
+    }
+
+    /// Real-time factor (audio duration / synthesis time).
+    /// Values above 1.0 mean faster than real-time.
+    public var realTimeFactor: Double {
+        synthesisTime > 0 ? duration / synthesisTime : 0
+    }
+
+    init(
+        samples: [Float],
+        phonemes: String = "",
+        tokenDurations: [Int] = [],
+        tokenCount: Int,
+        synthesisTime: TimeInterval,
+        bucket: ModelBucket? = nil
+    ) {
+        self.samples = samples
+        self.phonemes = phonemes
+        self.tokenDurations = tokenDurations
+        self.tokenCount = tokenCount
+        self.synthesisTime = synthesisTime
+        self.bucket = bucket
+    }
+}

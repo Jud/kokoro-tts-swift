@@ -1,0 +1,31 @@
+# Build artifacts
+.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+Package.resolved
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Models & exports
+*.tar.gz
+models_export/
+
+# Research artifacts
+research/results.tsv
+research/run*.log
+research/audio/
+research/baseline*.json
+results.tsv
+
+# Test outputs
+compare_output/
+verify_output/
+
+# OS
+.DS_Store
