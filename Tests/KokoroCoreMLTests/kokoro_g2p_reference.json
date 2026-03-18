@@ -1,0 +1,178 @@
+[
+  {
+    "text": "Hello world",
+    "phonemes": "həlˈO wˈɜɹld"
+  },
+  {
+    "text": "The quick brown fox jumps over the lazy dog.",
+    "phonemes": "ðə kwˈɪk bɹˈWn fˈɑks ʤˈʌmps ˈOvəɹ ðə lˈAzi dˈɔɡ."
+  },
+  {
+    "text": "I have 42 cats.",
+    "phonemes": "ˌI hæv fˈɔɹTi tˈu kˈæts."
+  },
+  {
+    "text": "She said hello to Dr. Smith.",
+    "phonemes": "ʃˌi sˈɛd həlˈO tə dˈɑktəɹ smˈɪθ."
+  },
+  {
+    "text": "The temperature is 98.6 degrees.",
+    "phonemes": "ðə tˈɛmpɹəʧəɹ ɪz nˈIndi ˈAt pYnt sˈɪks dəɡɹˈiz."
+  },
+  {
+    "text": "AVFoundation handles audio playback.",
+    "phonemes": "ˌAvˈi fWndˈAʃən hˈændəlz ˈɔdiO plˈAbˌæk."
+  },
+  {
+    "text": "Running quickly through the forest.",
+    "phonemes": "ɹˈʌnɪŋ kwˈɪkli θɹu ðə fˈɔɹəst."
+  },
+  {
+    "text": "It costs $19.99 today.",
+    "phonemes": "ˌɪt kˈɔsts nˌIntˈin dˈɑləɹz ænd nˈIndi nˈIn sˈɛnts tədˈA."
+  },
+  {
+    "text": "He can't believe it's not butter.",
+    "phonemes": "hˌi kˈænt bəlˈiv ɪts nˌɑt bˈʌTəɹ."
+  },
+  {
+    "text": "The 1st of January, 2025.",
+    "phonemes": "ðə fˈɜɹst ʌv ʤˈænjəwˌɛɹi, twˈɛnti twˈɛnti fˈIv."
+  },
+  {
+    "text": "Mr. and Mrs. Johnson arrived.",
+    "phonemes": "mˈɪstəɹ ænd mˈɪsɪz ʤˈɑnsᵊn əɹˈIvd."
+  },
+  {
+    "text": "They're going to the store.",
+    "phonemes": "ðˌɛɹ ɡˈOɪŋ tə ðə stˈɔɹ."
+  },
+  {
+    "text": "A beautiful, sunny afternoon.",
+    "phonemes": "ɐ bjˈuTəfəl, sˈʌni ˌæftəɹnˈun."
+  },
+  {
+    "text": "What time is it?",
+    "phonemes": "wˌʌt tˈIm ɪz ɪt?"
+  },
+  {
+    "text": "I don't know!",
+    "phonemes": "ˌI dˈOnt nˈO!"
+  },
+  {
+    "text": "The United States of America.",
+    "phonemes": "ðə junˈITᵻd stˈAts ʌv əmˈɛɹəkə."
+  },
+  {
+    "text": "Please turn left at the intersection.",
+    "phonemes": "plˈiz tˈɜɹn lˈɛft æt ði ˌɪntəɹsˈɛkʃən."
+  },
+  {
+    "text": "Good morning, how are you doing?",
+    "phonemes": "ɡˈʊd mˈɔɹnɪŋ, hˌW ɑɹ ju dˈuɪŋ?"
+  },
+  {
+    "text": "Three hundred and forty two.",
+    "phonemes": "θɹˈi hˈʌndɹəd ænd fˈɔɹTi tˈu."
+  },
+  {
+    "text": "The children played outside.",
+    "phonemes": "ðə ʧˈɪldɹᵊn plˈAd ˌWtsˈId."
+  },
+  {
+    "text": "25 people arrived.",
+    "phonemes": "twˈɛnti fˈIv pˈipᵊl əɹˈIvd."
+  },
+  {
+    "text": "She scored 99 percent.",
+    "phonemes": "ʃˌi skˈɔɹd nˈIndi nˈIn pəɹsˈɛnt."
+  },
+  {
+    "text": "The year was 1999.",
+    "phonemes": "ðə jˈɪɹ wʌz nˌIntˈin nˈIndi nˈIn."
+  },
+  {
+    "text": "Call 911 immediately.",
+    "phonemes": "kˈɔl nˈIn hˈʌndɹəd əlˈɛvᵊn ɪmˈidiətli."
+  },
+  {
+    "text": "Room 404 is empty.",
+    "phonemes": "ɹˈum fˈɔɹ hˈʌndɹəd fˈɔɹ ɪz ˈɛmpti."
+  },
+  {
+    "text": "He ran 3.14 miles.",
+    "phonemes": "hˌi ɹˈæn θɹˈi pYnt wˈʌn fˈɔɹ mˈIlz."
+  },
+  {
+    "text": "It weighs 0.5 kilograms.",
+    "phonemes": "ˌɪt wˈAz zˈɪɹO pYnt fˈIv kˈɪləɡɹˌæmz."
+  },
+  {
+    "text": "The price is $5.",
+    "phonemes": "ðə pɹˈIs ɪz fˈIv dˈɑləɹz."
+  },
+  {
+    "text": "That costs $1.50.",
+    "phonemes": "ðˈæt kˈɔsts wˈʌn dˈɑləɹ ænd fˈɪfti sˈɛnts."
+  },
+  {
+    "text": "Add 2 cups of flour.",
+    "phonemes": "ˈæd tˈu kˈʌps ʌv flˈWəɹ."
+  },
+  {
+    "text": "The FBI investigated.",
+    "phonemes": "ði ˌɛfbˌiˈI ɪnvˈɛstəɡˌATᵻd."
+  },
+  {
+    "text": "She works at NASA.",
+    "phonemes": "ʃˌi wˈɜɹks æt nˈæsə."
+  },
+  {
+    "text": "Open the URL in Safari.",
+    "phonemes": "ˈOpᵊn ðə jˌuˌɑɹˈɛl ɪn səfˈɑɹi."
+  },
+  {
+    "text": "UIViewController is a class.",
+    "phonemes": "jˌuˈI vjˈu kəntɹˈOləɹ ɪz ɐ klˈæs."
+  },
+  {
+    "text": "Check the iOS settings.",
+    "phonemes": "ʧˈɛk ði ˌIOˈɛs sˈɛTɪŋz."
+  },
+  {
+    "text": "The 2nd place winner.",
+    "phonemes": "ðə sˈɛkənd plˈAs wˈɪnəɹ."
+  },
+  {
+    "text": "Her 21st birthday party.",
+    "phonemes": "hˌɜɹ twˈɛnti fˈɜɹst bˈɜɹθdˌA pˈɑɹTi."
+  },
+  {
+    "text": "The 100th anniversary.",
+    "phonemes": "ðə wˈʌn hˈʌndɹədθ ˌænəvˈɜɹsəɹi."
+  },
+  {
+    "text": "It's raining cats and dogs.",
+    "phonemes": "ˌɪts ɹˈAnɪŋ kˈæts ænd dˈɔɡz."
+  },
+  {
+    "text": "The dog's bone was buried.",
+    "phonemes": "ðə dˈɔɡz bˈOn wʌz bˈɛɹid."
+  },
+  {
+    "text": "Wait... what happened?",
+    "phonemes": "wˈAt... wˌʌt hˈæpənd?"
+  },
+  {
+    "text": "Hello; goodbye.",
+    "phonemes": "həlˈO; ɡˌʊdbˈI."
+  },
+  {
+    "text": "\"To be or not to be.\"",
+    "phonemes": "“tə bi ɔɹ nˌɑt tə bˈi.”"
+  },
+  {
+    "text": "AVKubernetesPlayer is a class.",
+    "phonemes": "ˌAvˈi kˌubəɹnˈɛTiz plˈAəɹ ɪz ɐ klˈæs."
+  }
+]
