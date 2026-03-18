@@ -21,7 +21,7 @@ echo "=== KokoroTTS Release: $TAG ==="
 # 1. Export CoreML models
 echo ""
 echo "Step 1: Exporting CoreML models..."
-.venv/bin/python scripts/export_coreml.py --output-dir "$EXPORT_DIR"
+PYTHONPATH=scripts .venv/bin/python scripts/export_coreml.py --output-dir "$EXPORT_DIR"
 
 # 2. Compile to .mlmodelc
 echo ""
