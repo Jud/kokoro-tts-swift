@@ -33,8 +33,8 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: .build
-          key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
-          restore-keys: spm-${{ runner.os }}-
+          key: spm-v2-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: spm-v2-${{ runner.os }}-
       - name: Build
         run: swift build
       - name: Test
@@ -52,8 +52,8 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: .build
-          key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
-          restore-keys: spm-${{ runner.os }}-
+          key: spm-v2-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: spm-v2-${{ runner.os }}-
 
       - name: Cache models
         id: model-cache
