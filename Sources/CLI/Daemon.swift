@@ -261,12 +261,19 @@ private func cleanStaleFiles(pidPath: String, sockPath: String) {
 private func handleClient(fd: Int32, engine: KokoroEngine) {
     defer { close(fd) }
 
-    guard let requestData = LengthPrefixedIO.readMessage(from: fd) else { return }
-    guard let request = try? JSONDecoder().decode(SynthesisRequest.self, from: requestData) else {
-        let err = SynthesisResponse(ok: false, error: "Invalid request")
-        if let data = try? JSONEncoder().encode(err) {
-            _ = LengthPrefixedIO.writeMessage(data, to: fd)
-        }
+    guard let request = DaemonIO.readMessage(SynthesisRequest.self, from: fd) else {
+        _ = DaemonIO.writeMessage(SynthesisResponse(ok: false, error: "Invalid request"), to: fd)
+        return
+    }
+
+    if request.version != DaemonConfig.protocolVersion {
+        _ = DaemonIO.writeMessage(
+            SynthesisResponse(
+                ok: false,
+                error:
+                    "Protocol mismatch: client v\(request.version), daemon v\(DaemonConfig.protocolVersion). "
+                    + "Run `kokoro daemon restart` to update."),
+            to: fd)
         return
     }
 
@@ -277,18 +284,14 @@ private func handleClient(fd: Int32, engine: KokoroEngine) {
 
         let response = SynthesisResponse(
             ok: true,
-            sampleCount: result.samples.count,
+            samples: SynthesisResponse.encodeSamples(result.samples),
             synthesisTime: result.synthesisTime,
             phonemes: result.phonemes,
             tokenCount: result.tokenCount)
 
-        guard let responseData = try? JSONEncoder().encode(response) else { return }
-        guard LengthPrefixedIO.writeMessage(responseData, to: fd) else { return }
-        _ = LengthPrefixedIO.writeRawSamples(result.samples, to: fd)
+        _ = DaemonIO.writeMessage(response, to: fd)
     } catch {
-        let errResponse = SynthesisResponse(ok: false, error: error.localizedDescription)
-        if let data = try? JSONEncoder().encode(errResponse) {
-            _ = LengthPrefixedIO.writeMessage(data, to: fd)
-        }
+        _ = DaemonIO.writeMessage(
+            SynthesisResponse(ok: false, error: error.localizedDescription), to: fd)
     }
 }

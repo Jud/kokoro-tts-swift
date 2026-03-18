@@ -12,6 +12,8 @@ public enum KokoroError: Error, LocalizedError, Sendable {
     case modelsNotAvailable(URL)
     /// Text exceeds the maximum token count for all available models.
     case textTooLong(tokenCount: Int, maxTokens: Int)
+    /// Automatic model download is not available on this platform.
+    case downloadNotSupported
 
     public var errorDescription: String? {
         switch self {
@@ -25,6 +27,10 @@ public enum KokoroError: Error, LocalizedError, Sendable {
             "No Kokoro models found at \(url.path)"
         case .textTooLong(let count, let max):
             "Text too long: \(count) tokens exceeds maximum of \(max)"
+        case .downloadNotSupported:
+            "Automatic model download is not available on this platform. "
+                + "Bundle the compiled CoreML models (.mlmodelc) and voices/ directory "
+                + "in your app, then pass the containing directory to KokoroEngine(modelDirectory:)."
         }
     }
 }

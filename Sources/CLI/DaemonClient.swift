@@ -15,34 +15,19 @@ enum DaemonClient {
         guard fd >= 0 else { return .unavailable }
         defer { close(fd) }
 
-        // Connected — from here, errors are daemon errors, not "unavailable"
-        guard let requestData = try? JSONEncoder().encode(request) else {
-            return .daemonError("Failed to encode request")
-        }
-        guard LengthPrefixedIO.writeMessage(requestData, to: fd) else {
+        guard DaemonIO.writeMessage(request, to: fd) else {
             return .daemonError("Failed to send request")
         }
 
-        guard let responseData = LengthPrefixedIO.readMessage(from: fd) else {
+        guard let response = DaemonIO.readMessage(SynthesisResponse.self, from: fd) else {
             return .daemonError("Failed to read response")
-        }
-        guard let response = try? JSONDecoder().decode(SynthesisResponse.self, from: responseData)
-        else {
-            return .daemonError("Failed to decode response")
         }
 
         guard response.ok else {
             return .daemonError(response.error ?? "Unknown daemon error")
         }
 
-        guard let sampleCount = response.sampleCount, sampleCount > 0 else {
-            return .success(response, [])
-        }
-
-        guard let samples = LengthPrefixedIO.readRawSamples(count: sampleCount, from: fd) else {
-            return .daemonError("Failed to read audio data")
-        }
-
+        let samples = response.floatSamples ?? []
         return .success(response, samples)
     }
 

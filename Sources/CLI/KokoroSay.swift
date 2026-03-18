@@ -42,6 +42,9 @@ struct Say: AsyncParsableCommand {
     @Flag(name: .long, help: "Stream audio (start playback before full synthesis)")
     var stream = false
 
+    @Flag(name: .long, help: "Input is IPA phonemes (skip G2P)")
+    var ipa = false
+
     @Flag(name: .long, help: "Print debug information")
     var debug = false
 
@@ -54,6 +57,9 @@ struct Say: AsyncParsableCommand {
     func validate() throws {
         guard (0.5...2.0).contains(speed) else {
             throw ValidationError("Speed must be between 0.5 and 2.0")
+        }
+        if stream && ipa {
+            throw ValidationError("--stream and --ipa cannot be used together yet")
         }
     }
 
@@ -92,8 +98,8 @@ struct Say: AsyncParsableCommand {
         // Resolve text once for both paths
         let inputText = try resolveText()
 
-        // Try daemon (unless --debug which needs local engine info)
-        if !debug {
+        // Try daemon (unless --debug or --ipa which need local engine)
+        if !debug && !ipa {
             let request = SynthesisRequest(
                 text: inputText, voice: voice, speed: speed, raw: raw)
             switch DaemonClient.synthesize(request) {
@@ -136,10 +142,14 @@ struct Say: AsyncParsableCommand {
             print("Model dir: \(dir.path)")
         }
 
-        let result = try engine.synthesize(
-            text: inputText, voice: voice, speed: speed,
-            rawAudio: raw
-        )
+        let result: SynthesisResult
+        if ipa {
+            result = try engine.synthesize(
+                ipa: inputText, voice: voice, speed: speed, rawAudio: raw)
+        } else {
+            result = try engine.synthesize(
+                text: inputText, voice: voice, speed: speed, rawAudio: raw)
+        }
 
         if debug { printDebugInfo(result: result) }
 
@@ -260,14 +270,19 @@ struct Say: AsyncParsableCommand {
         var totalFrames: AVAudioFrameCount = 0
         var reportedFirst = false
 
-        for await buffer in try engine.speak(text, voice: voice, speed: speed) {
-            chunks += 1
-            totalFrames += buffer.frameLength
-            player.scheduleBuffer(buffer, completionHandler: nil)
-            if !reportedFirst {
-                reportedFirst = true
-                let latency = CFAbsoluteTimeGetCurrent() - t0
-                print("[\(voice)] first audio in \(Int(latency * 1000))ms")
+        for await event in try engine.speak(text, voice: voice, speed: speed) {
+            switch event {
+            case .audio(let buffer):
+                chunks += 1
+                totalFrames += buffer.frameLength
+                player.scheduleBuffer(buffer, completionHandler: nil)
+                if !reportedFirst {
+                    reportedFirst = true
+                    let latency = CFAbsoluteTimeGetCurrent() - t0
+                    print("[\(voice)] first audio in \(Int(latency * 1000))ms")
+                }
+            case .chunkFailed(let error):
+                print("[\(voice)] chunk failed: \(error.localizedDescription)")
             }
         }
 

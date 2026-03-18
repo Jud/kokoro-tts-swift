@@ -110,7 +110,7 @@ public final class KokoroEngine: @unchecked Sendable {
     // MARK: - Internal Constants
 
     /// Output sample rate in Hz (24kHz).
-    static let sampleRate = 24_000
+    public static let sampleRate = 24_000
 
     /// Audio samples per duration frame (from model.mil: total_frames * 600).
     static let hopSize = 600
@@ -291,6 +291,41 @@ public final class KokoroEngine: @unchecked Sendable {
         let clampedSpeed = Self.clampSpeed(speed)
         let (fullPhonemes, mergedIds) = prepareChunks(text: text)
 
+        return try synthesizeTokens(
+            phonemes: fullPhonemes, mergedIds: mergedIds, voice: voice,
+            speed: clampedSpeed, rawAudio: rawAudio, startTime: t0)
+    }
+
+    /// Synthesize pre-phonemized IPA text to PCM audio samples.
+    ///
+    /// Skips the G2P pipeline entirely — pass IPA phoneme strings directly.
+    /// Useful for fine-grained pronunciation control or pre-processed text.
+    ///
+    /// - Parameters:
+    ///   - ipa: IPA phoneme string (e.g. `"hˈɛloʊ wˈɜːld"`).
+    ///   - voice: Voice preset name.
+    ///   - speed: Speech rate multiplier (0.5–2.0). Default 1.0.
+    ///   - rawAudio: If true, skip post-processing.
+    /// - Returns: Synthesis result with PCM samples and metadata.
+    /// - Throws: ``KokoroError/voiceNotFound(_:)`` if the voice doesn't exist.
+    public func synthesize(
+        ipa: String, voice: String, speed: Float = 1.0,
+        rawAudio: Bool = false
+    ) throws -> SynthesisResult {
+        let t0 = CFAbsoluteTimeGetCurrent()
+        let clampedSpeed = Self.clampSpeed(speed)
+        let mergedIds = chunkAndTokenize(ipa)
+
+        return try synthesizeTokens(
+            phonemes: ipa, mergedIds: mergedIds, voice: voice,
+            speed: clampedSpeed, rawAudio: rawAudio, startTime: t0)
+    }
+
+    private func synthesizeTokens(
+        phonemes: String, mergedIds: [[Int]], voice: String,
+        speed: Float, rawAudio: Bool, startTime: CFAbsoluteTime
+    ) throws -> SynthesisResult {
+
         var allSamples: [Float] = []
         var allDurations: [Int] = []
         var totalTokens = 0
@@ -308,7 +343,7 @@ public final class KokoroEngine: @unchecked Sendable {
             selectedBucket = useBucket
 
             var (samples, durations) = try synthesizeChunk(
-                tokenIds: tokenIds, styleVector: styleVector, speed: clampedSpeed,
+                tokenIds: tokenIds, styleVector: styleVector, speed: speed,
                 bucket: useBucket)
 
             applyFades(&samples)
@@ -321,9 +356,9 @@ public final class KokoroEngine: @unchecked Sendable {
 
         if !rawAudio { postProcess(&allSamples) }
 
-        let elapsed = CFAbsoluteTimeGetCurrent() - t0
+        let elapsed = CFAbsoluteTimeGetCurrent() - startTime
         return SynthesisResult(
-            samples: allSamples, phonemes: fullPhonemes,
+            samples: allSamples, phonemes: phonemes,
             tokenDurations: allDurations, tokenCount: totalTokens,
             synthesisTime: elapsed, bucket: selectedBucket)
     }
@@ -372,8 +407,13 @@ public final class KokoroEngine: @unchecked Sendable {
             fullPhonemes = paragraphs.map { lockedPhonemize($0) }.joined(separator: " ")
         }
 
+        return (fullPhonemes, chunkAndTokenize(fullPhonemes))
+    }
+
+    /// Chunk phonemes, tokenize each chunk, then merge adjacent short chunks.
+    private func chunkAndTokenize(_ phonemes: String) -> [[Int]] {
         let maxTokens = activeBuckets.last!.maxTokens
-        let chunks = Self.chunkPhonemes(fullPhonemes, maxPhonemes: maxTokens - Self.tokenPadding)
+        let chunks = Self.chunkPhonemes(phonemes, maxPhonemes: maxTokens - Self.tokenPadding)
         let tokenized = chunks.map { tokenizer.encode($0) }
 
         var mergedIds: [[Int]] = []
@@ -391,8 +431,7 @@ public final class KokoroEngine: @unchecked Sendable {
             }
         }
         if !currentIds.isEmpty { mergedIds.append(currentIds) }
-
-        return (fullPhonemes, mergedIds)
+        return mergedIds
     }
 
     private func lockedPhonemize(_ text: String) -> String {
@@ -603,8 +642,11 @@ public final class KokoroEngine: @unchecked Sendable {
     /// Consumers just iterate and play — no manual chunking or PCM handling needed.
     ///
     /// ```swift
-    /// for await buffer in try engine.speak("Long text...", voice: "af_heart") {
-    ///     playerNode.scheduleBuffer(buffer)
+    /// for await event in try engine.speak("Long text...", voice: "af_heart") {
+    ///     switch event {
+    ///     case .audio(let buffer): playerNode.scheduleBuffer(buffer)
+    ///     case .chunkFailed(let error): print("Chunk failed: \(error)")
+    ///     }
     /// }
     /// ```
     ///
@@ -612,13 +654,13 @@ public final class KokoroEngine: @unchecked Sendable {
     ///   - text: Text to speak (any length — automatically chunked).
     ///   - voice: Voice preset name (e.g. `"af_heart"`).
     ///   - speed: Speech rate multiplier (0.5–2.0). Default 1.0.
-    /// - Returns: Stream of playback-ready 24kHz mono audio buffers.
+    /// - Returns: Stream of ``SpeakEvent`` values — audio buffers or chunk errors.
     /// - Throws: ``KokoroError/voiceNotFound(_:)`` if the voice doesn't exist.
     public func speak(
         _ text: String,
         voice: String,
         speed: Float = 1.0
-    ) throws -> AsyncStream<AVAudioPCMBuffer> {
+    ) throws -> AsyncStream<SpeakEvent> {
         guard availableVoices.contains(voice) else {
             throw KokoroError.voiceNotFound(voice)
         }
@@ -655,16 +697,17 @@ public final class KokoroEngine: @unchecked Sendable {
                                 from: [Float](repeating: 0, count: Self.interChunkSilence),
                                 format: format)
                         {
-                            continuation.yield(gap)
+                            continuation.yield(.audio(gap))
                         }
 
                         if let buffer = Self.makePCMBuffer(from: samples, format: format) {
-                            continuation.yield(buffer)
+                            continuation.yield(.audio(buffer))
                         }
                         isFirst = false
                     } catch {
                         Self.logger.error(
                             "Streaming chunk failed: \(error.localizedDescription)")
+                        continuation.yield(.chunkFailed(error))
                     }
                 }
 
@@ -742,6 +785,20 @@ public final class KokoroEngine: @unchecked Sendable {
             vDSP_vsmul(samples, 1, &scale, &samples, 1, vDSP_Length(samples.count))
         }
     }
+}
+
+// MARK: - SpeakEvent
+
+/// Events yielded by ``KokoroEngine/speak(_:voice:speed:)``.
+///
+/// Most events are ``audio(_:)`` buffers ready for playback. If a chunk
+/// fails mid-stream, ``chunkFailed(_:)`` is yielded instead and the stream
+/// continues with the next chunk — consumers decide how to handle the gap.
+public enum SpeakEvent: @unchecked Sendable {
+    /// A playback-ready audio buffer for one synthesized chunk.
+    case audio(AVAudioPCMBuffer)
+    /// A chunk failed to synthesize. The stream continues with remaining chunks.
+    case chunkFailed(any Error)
 }
 
 // MARK: - SynthesisResult

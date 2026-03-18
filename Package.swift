@@ -11,6 +11,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/Jud/swift-bart-g2p.git", from: "0.4.0"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
+        .package(url: "https://github.com/edgeengineer/cbor.git", from: "0.0.6"),
     ],
     targets: [
         .target(
@@ -28,6 +29,7 @@ let package = Package(
             dependencies: [
                 "KokoroTTS",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
+                .product(name: "CBOR", package: "cbor"),
             ],
             path: "Sources/CLI"
         ),

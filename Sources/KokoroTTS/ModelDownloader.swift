@@ -127,9 +127,7 @@ enum ModelDownloader {
                 throw CocoaError(.fileReadCorruptFile)
             }
         #else
-            throw KokoroError.inferenceFailed(
-                "Automatic model download is only supported on macOS. "
-                    + "On iOS, bundle models with your app or download and extract manually.")
+            throw KokoroError.downloadNotSupported
         #endif
 
         writeInstalledTag(tag, at: directory)

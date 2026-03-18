@@ -1,12 +1,17 @@
+import CBOR
 import Foundation
 
 enum DaemonConfig {
     private static let basePath = "\(NSTemporaryDirectory())kokoro-tts-\(getuid())"
     static let socketPath = basePath + ".sock"
     static let pidPath = basePath + ".pid"
+
+    /// Increment when the wire format changes.
+    static let protocolVersion: Int = 1
 }
 
 struct SynthesisRequest: Codable {
+    var version: Int = DaemonConfig.protocolVersion
     var text: String
     var voice: String
     var speed: Float
@@ -14,12 +19,43 @@ struct SynthesisRequest: Codable {
 }
 
 struct SynthesisResponse: Codable {
+    var version: Int = DaemonConfig.protocolVersion
     var ok: Bool
     var error: String?
-    var sampleCount: Int?
+    /// Raw PCM audio as bytes. Uses `Data` so CBOR encodes as a byte string.
+    var samples: Data?
     var synthesisTime: Double?
     var phonemes: String?
     var tokenCount: Int?
+
+    /// Decode the raw sample bytes back to Float array.
+    var floatSamples: [Float]? {
+        guard let data = samples, !data.isEmpty,
+            data.count % MemoryLayout<Float>.size == 0
+        else { return nil }
+        return data.withUnsafeBytes { buf in
+            Array(buf.assumingMemoryBound(to: Float.self))
+        }
+    }
+
+    /// Encode Float samples to raw bytes for wire transfer.
+    static func encodeSamples(_ floats: [Float]) -> Data {
+        floats.withUnsafeBytes { Data($0) }
+    }
+}
+
+// MARK: - CBOR I/O
+
+enum DaemonIO {
+    static func writeMessage<T: Encodable>(_ value: T, to fd: Int32) -> Bool {
+        guard let bytes = try? CBOREncoder().encode(value) else { return false }
+        return LengthPrefixedIO.writeBytes(bytes, to: fd)
+    }
+
+    static func readMessage<T: Decodable>(_ type: T.Type, from fd: Int32) -> T? {
+        guard let bytes = LengthPrefixedIO.readBytes(from: fd) else { return nil }
+        return try? CBORDecoder().decode(type, from: bytes)
+    }
 }
 
 // MARK: - Unix Socket Helpers
@@ -96,12 +132,12 @@ enum UnixSocket {
 // MARK: - Length-prefixed I/O
 
 enum LengthPrefixedIO {
-    static func writeMessage(_ data: Data, to fd: Int32) -> Bool {
-        guard writeLengthHeader(data.count, to: fd) else { return false }
-        return data.withUnsafeBytes { writeFully(fd: fd, from: $0.baseAddress!, count: data.count) }
+    static func writeBytes(_ bytes: [UInt8], to fd: Int32) -> Bool {
+        guard writeLengthHeader(bytes.count, to: fd) else { return false }
+        return bytes.withUnsafeBytes { writeFully(fd: fd, from: $0.baseAddress!, count: bytes.count) }
     }
 
-    static func readMessage(from fd: Int32) -> Data? {
+    static func readBytes(from fd: Int32) -> [UInt8]? {
         var lengthBE: UInt32 = 0
         let headerRead = withUnsafeMutableBytes(of: &lengthBE) { buf in
             readFully(fd: fd, into: buf.baseAddress!, count: 4)
@@ -109,32 +145,11 @@ enum LengthPrefixedIO {
         guard headerRead else { return nil }
         let length = Int(UInt32(bigEndian: lengthBE))
         guard length > 0, length < 100_000_000 else { return nil }
-        var data = Data(count: length)
-        let ok = data.withUnsafeMutableBytes { buf in
+        var bytes = [UInt8](repeating: 0, count: length)
+        let ok = bytes.withUnsafeMutableBytes { buf in
             readFully(fd: fd, into: buf.baseAddress!, count: length)
         }
-        return ok ? data : nil
-    }
-
-    static func writeRawSamples(_ samples: [Float], to fd: Int32) -> Bool {
-        let byteCount = samples.count * MemoryLayout<Float>.size
-        guard writeLengthHeader(byteCount, to: fd) else { return false }
-        return samples.withUnsafeBytes { writeFully(fd: fd, from: $0.baseAddress!, count: byteCount) }
-    }
-
-    static func readRawSamples(count: Int, from fd: Int32) -> [Float]? {
-        var lengthBE: UInt32 = 0
-        let headerRead = withUnsafeMutableBytes(of: &lengthBE) { buf in
-            readFully(fd: fd, into: buf.baseAddress!, count: 4)
-        }
-        guard headerRead else { return nil }
-        let byteCount = Int(UInt32(bigEndian: lengthBE))
-        guard byteCount == count * MemoryLayout<Float>.size else { return nil }
-        var samples = [Float](repeating: 0, count: count)
-        let ok = samples.withUnsafeMutableBytes { buf in
-            readFully(fd: fd, into: buf.baseAddress!, count: byteCount)
-        }
-        return ok ? samples : nil
+        return ok ? bytes : nil
     }
 
     private static func writeLengthHeader(_ length: Int, to fd: Int32) -> Bool {
