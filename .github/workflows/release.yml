@@ -27,7 +27,15 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           STAGING="kokoro-${VERSION}-macos-arm64"
           mkdir -p "$STAGING"
+
+          # Binary
           cp .build/release/kokoro "$STAGING/"
+
+          # Resource bundles (G2P lexicons, BART model, vocab)
+          for bundle in .build/release/*.bundle; do
+            cp -R "$bundle" "$STAGING/"
+          done
+
           tar czf "${STAGING}.tar.gz" "$STAGING"
           shasum -a 256 "${STAGING}.tar.gz" > "${STAGING}.tar.gz.sha256"
           echo "TARBALL=${STAGING}.tar.gz" >> $GITHUB_ENV
