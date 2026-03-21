@@ -22,10 +22,15 @@ research/run*.log
 research/audio/
 research/baseline*.json
 results.tsv
+run.log
+run*.log
 
 # Test outputs
 compare_output/
 verify_output/
+
+# Claude
+.claude/
 
 # OS
 .DS_Store

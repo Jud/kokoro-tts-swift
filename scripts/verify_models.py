@@ -59,20 +59,31 @@ def verify_bucket(pipeline, model, set_phases_fn, bucket_name, bucket_config):
     mask_np = np.zeros((1, max_tokens), dtype=np.int32)
     mask_np[0, :seq_len] = 1
 
-    # CoreML pipeline (run on 8MB-stack thread to avoid stack overflow)
+    # CoreML pipeline — frontend and backend must run on separate threads.
+    # CoreML's CPU runtime corrupts thread-local state when running the large
+    # frontend, causing the backend to segfault on the same thread.
     coreml_result = {}
 
-    def run_coreml():
+    def run_frontend():
         fe = ct.models.MLModel(f"models_export/{bucket_name}_frontend.mlpackage",
-                               compute_units=ct.ComputeUnit.CPU_ONLY)
-        be = ct.models.MLModel(f"models_export/{bucket_name}_backend.mlpackage",
-                               compute_units=ct.ComputeUnit.CPU_ONLY)
+                               compute_units=ct.ComputeUnit.CPU_ONLY)  # atan2 stays off ANE
         fe_out = fe.predict({
             "input_ids": ids_np, "attention_mask": mask_np,
             "ref_s": style.numpy().astype(np.float32),
             "speed": np.array([1.0], dtype=np.float32),
             "random_phases": phases,
         })
+        coreml_result["fe_out"] = fe_out
+
+    t1 = threading.Thread(target=run_frontend)
+    t1.start()
+    t1.join()
+
+    fe_out = coreml_result["fe_out"]
+
+    def run_backend():
+        be = ct.models.MLModel(f"models_export/{bucket_name}_backend.mlpackage",
+                               compute_units=ct.ComputeUnit.ALL)  # ANE-eligible, matches Swift
         be_out = be.predict({
             "asr": fe_out["asr"].astype(np.float32),
             "F0_pred": fe_out["F0_pred"].astype(np.float32),
@@ -83,9 +94,9 @@ def verify_bucket(pipeline, model, set_phases_fn, bucket_name, bucket_config):
         coreml_result["audio_len"] = int(fe_out["audio_length_samples"].flatten()[0])
         coreml_result["audio"] = be_out["audio"].flatten()[:coreml_result["audio_len"]]
 
-    t = threading.Thread(target=run_coreml)
-    t.start()
-    t.join()
+    t2 = threading.Thread(target=run_backend)
+    t2.start()
+    t2.join()
 
     cm_alen = coreml_result["audio_len"]
     cm_audio = coreml_result["audio"]

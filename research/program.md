@@ -1,16 +1,16 @@
-# kokoro-coreml CoreML Research
+# kokoro-coreml research
 
-This is an experiment to have the LLM optimize CoreML model export.
+This is an experiment to have the LLM optimize CoreML model export fidelity.
 
 ## Setup
 
 To set up a new experiment, work with the user to:
 
-1. **Agree on a run tag**: propose a tag based on today's date (e.g. `mar14`). The branch `research/<tag>` must not already exist — this is a fresh run.
+1. **Agree on a run tag**: propose a tag based on today's date (e.g. `mar20`). The branch `research/<tag>` must not already exist — this is a fresh run.
 2. **Create the branch**: `git checkout -b research/<tag>` from current main.
 3. **Read the in-scope files**: Read these files for full context:
    - `scripts/stage_harness.py` — fixed evaluation harness. Do not modify.
-   - `scripts/export_coreml.py` — the file you modify. Contains inlined `CustomSTFT` and `SineGen`, pipeline split modules, and export logic.
+   - `scripts/export_coreml.py` — the file you modify. Contains CoreML export logic, pipeline split modules, ANE compatibility replacements, and patching.
    - `research/program.md` — this file.
 4. **Verify environment**: `.venv/bin/python scripts/stage_harness.py` should run all stages.
 5. **Initialize results.tsv**: Create `results.tsv` with just the header row. The baseline will be recorded after the first run.
@@ -20,17 +20,26 @@ Once you get confirmation, kick off the experimentation.
 
 ## Experimentation
 
-Each experiment runs the stage harness, which traces, converts, and compares 11 targets across 3 test sentences. You launch it simply as: `.venv/bin/python scripts/stage_harness.py 2>&1 > run.log`
+Each experiment exports CoreML models for all three buckets, then compares each against the PyTorch reference using the `af_heart` voice across short, half, and filled sentence lengths. You launch it simply as: `.venv/bin/python scripts/stage_harness.py > run.log 2>&1`
 
 **What you CAN do:**
-- Modify `scripts/export_coreml.py` — this is the only file you edit. Everything is fair game: CustomSTFT, SineGen, pipeline split modules, patching logic.
+- Modify `scripts/export_coreml.py` — this is the only file you edit.
 
 **What you CANNOT do:**
-- Modify `scripts/stage_harness.py`. It is read-only. It contains the fixed evaluation, stage wrappers, and comparison logic.
-- Modify files in `.venv/`.
+- Modify any file other than `scripts/export_coreml.py`. In particular, `scripts/reference.py` contains `CustomSTFT`, `SineGen`, and `patch_sinegen_for_export` which define the PyTorch reference — these are immutable.
 - Install new packages or add dependencies.
 
-**The goal is simple: get the highest worst-case ANE Corr and lowest ANE latency.** The harness reports CPU Corr, ANE Corr, CPU Cold/Warm, ANE Cold/Warm for each stage. PASS if ANE Corr > 0.99. Pipeline stages (10, 11) test two-model CPU+ANE splits.
+**The goal is simple: get the lowest p99.9 while keeping Corr >= 0.99.** p99.9 is the 99.9th percentile of |CoreML - PyTorch| sample differences — it measures the severity of the worst recurring artifacts. Correlation measures waveform shape. A change that improves one bucket but regresses another is not acceptable.
+
+Current baselines (af_heart, worst case across sentence lengths, compared against vanilla PyTorch):
+
+| Bucket | Corr | p99.9 | Spk/s | Speed |
+|--------|------|-------|-------|-------|
+| kokoro_21_5s | 0.9968 | 0.0435 | 16 | 94ms |
+| kokoro_24_10s | 0.9937 | 0.0809 | 85 | 124ms |
+| kokoro_25_20s | 0.9941 | 0.0734 | 60 | 256ms |
+
+PASS requires: Corr >= 0.99, Spk/s <= 50, Speed <= 300ms.
 
 **Simplicity criterion**: All else being equal, simpler is better. A small improvement that adds ugly complexity is not worth it. Conversely, removing something and getting equal or better results is a great outcome — that's a simplification win. When evaluating whether to keep a change, weigh the complexity cost against the improvement magnitude.
 
@@ -38,40 +47,40 @@ Each experiment runs the stage harness, which traces, converts, and compares 11 
 
 ## Output format
 
-The harness prints a results table like this:
+The harness runs all three buckets automatically and prints:
 
 ```
-Stage            Status    CPU Corr   Cold   Warm   ANE Corr   Cold   Warm
-----------------------------------------------------------------------------------------
-6_decoder        PASS        0.9961  371ms  335ms     0.9960 1398ms 1384ms
-10_gen_pipe      PASS        0.9961  353ms  327ms     0.9961  179ms  121ms
-11_dec_pipe      PASS        0.9961  378ms  337ms     0.9961  218ms  131ms
+Test                             Corr   p99.9  Spk/s  Speed
+--------------------------------------------------------------
+kokoro_21_5s/short       PASS  0.9977  0.0453     16   94ms
+kokoro_21_5s/half        PASS  0.9982  0.0302      1   94ms
+kokoro_21_5s/filled      PASS  0.9985  0.0287      2   94ms
+kokoro_21_5s/WORST       PASS  0.9977  0.0453     16   96ms
+kokoro_24_10s/short      PASS  0.9966  0.0569     43  124ms
+...
+kokoro_25_20s/WORST      FAIL  0.9948  0.0834     65  254ms
 ```
 
-You can run a single stage for faster iteration:
+Extract the key results:
 
 ```
-.venv/bin/python scripts/stage_harness.py --stage 10
-.venv/bin/python scripts/stage_harness.py --stage 11
+grep "WORST" run.log
 ```
 
 ## Logging results
 
 When an experiment is done, log it to `results.tsv` (tab-separated, NOT comma-separated — commas break in descriptions).
 
-The TSV has a header row and 7 columns:
-
 ```
-commit	stage	cpu_corr	ane_corr	cpu_warm_ms	ane_warm_ms	status	description
+commit	bucket	corr	p999	spike_rate	speed_ms	status	description
 ```
 
-- One row per stage per experiment.
+- One row per bucket per experiment (the WORST case across sentence lengths).
 - status: `keep`, `discard`, or `crash`
-- Run multiple times to verify — single-run results can be misleading due to phase-dependent variance.
 
 ## The experiment loop
 
-The experiment runs on a dedicated branch (e.g. `research/mar14`).
+The experiment runs on a dedicated branch (e.g. `research/mar20`).
 
 LOOP FOREVER:
 
@@ -79,11 +88,11 @@ LOOP FOREVER:
 2. Tune `scripts/export_coreml.py` with an experimental idea by directly hacking the code.
 3. git commit
 4. Run the experiment: `.venv/bin/python scripts/stage_harness.py > run.log 2>&1` (redirect everything — do NOT use tee or let output flood your context)
-5. Read out the results: `grep "WORST CASE" -A 20 run.log`
+5. Read out the results: `grep "WORST" run.log`
 6. If the grep output is empty, the run crashed. Run `tail -n 50 run.log` to read the Python stack trace and attempt a fix. If you can't get things to work after more than a few attempts, give up.
 7. Record the results in the tsv (NOTE: do not commit the results.tsv file, leave it untracked by git)
-8. If ANE Corr improved or ANE latency decreased without regression: keep.
-9. If worse: `git reset --hard HEAD~1`.
+8. If p99.9 improved (lower) without correlation regression (Corr stays >= 0.99): keep.
+9. If p99.9 is equal or worse, or correlation dropped: `git reset --hard HEAD~1`.
 
 The idea is that you are a completely autonomous researcher trying things out. If they work, keep. If they don't, discard. And you're advancing the branch so that you can iterate. If you feel like you're getting stuck in some way, you can rewind but you should probably do this very very sparingly (if ever).
 
