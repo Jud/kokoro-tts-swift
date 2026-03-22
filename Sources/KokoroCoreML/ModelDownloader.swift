@@ -141,5 +141,16 @@ enum ModelDownloader {
                 try? fm.removeItem(at: directory.appendingPathComponent(name))
             }
         }
+
+        // Clean up legacy JSON voice files (replaced by binary .bin format)
+        let voiceDir = directory.appendingPathComponent("voices")
+        if let voiceFiles = try? fm.contentsOfDirectory(atPath: voiceDir.path) {
+            let hasBin = voiceFiles.contains { $0.hasSuffix(".bin") }
+            if hasBin {
+                for name in voiceFiles where name.hasSuffix(".json") {
+                    try? fm.removeItem(at: voiceDir.appendingPathComponent(name))
+                }
+            }
+        }
     }
 }
