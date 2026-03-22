@@ -108,7 +108,7 @@ kokoro daemon start   # keep models loaded, 3x faster repeat synthesis
 | metric | value |
 |--------|-------|
 | real-time factor | 6-16x faster than real-time |
-| inference | ~112ms per chunk via CoreML |
+| inference | ~100ms per chunk via CoreML |
 | sample rate | 24kHz mono PCM |
 | voices | 54 distinct voices and accents |
 | speed control | 0.5x - 2.0x |
@@ -129,14 +129,7 @@ graph LR
 
 text goes through an english G2P pipeline -- lexicon lookup, morphological stemming, number expansion. unknown words hit a fallback chain: CamelCase splitting, BART neural G2P, letter spelling as last resort.
 
-the engine picks the smallest model bucket that fits:
-
-| bucket | max tokens | audio length |
-|--------|-----------|-------------|
-| small  | 124       | ~5s         |
-| medium | 242       | ~10s        |
-
-longer text gets chunked at sentence boundaries. `synthesize()` returns the full result. `speak()` streams chunks as `AsyncStream<SpeakEvent>`.
+the engine uses a single dynamic CoreML model pair -- no fixed buckets. any length text gets chunked at sentence boundaries. `synthesize()` returns the full result. `speak()` streams chunks as `AsyncStream<SpeakEvent>`.
 
 ## architecture
 
@@ -146,7 +139,7 @@ graph TD
         T1[text] --> T2[paragraph split]
         T2 --> T3[G2P phonemization]
         T3 --> T4[punctuation-aware chunking]
-        T4 --> T5[tokenization + merging]
+        T4 --> T5[tokenization]
     end
 
     subgraph "inference"
