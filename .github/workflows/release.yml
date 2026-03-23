@@ -24,7 +24,7 @@ jobs:
           sed -i '' "s/version: \".*\"/version: \"${VERSION}\"/" Sources/CLI/KokoroSay.swift
 
       - name: Build release binary
-        run: swift build -c release --traits espeak
+        run: swift build -c release
 
       - name: Package binary
         run: |

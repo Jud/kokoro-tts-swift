@@ -32,16 +32,6 @@ dependencies: [
 
 models (~99MB) download automatically on first use.
 
-### multilingual (optional, GPL-3.0)
-
-for French, Spanish, Italian, Portuguese, Hindi, and other languages via eSpeak-NG:
-
-```bash
-swift build --traits espeak
-```
-
-this enables `--language` in the CLI and `EspeakPhonemizer` in the library API. default builds remain Apache 2.0.
-
 ## three lines to speech
 
 ```swift
@@ -99,17 +89,6 @@ skip the G2P pipeline entirely:
 let result = try engine.synthesize(ipa: "hˈɛloʊ wˈɜːld", voice: "af_heart")
 ```
 
-### multilingual (with eSpeak)
-
-```swift
-let phonemizer = try EspeakPhonemizer()
-let result = try engine.synthesize(
-    text: "bonjour le monde", voice: "ff_siwis",
-    phonemizer: phonemizer, language: "fr")
-```
-
-requires `--traits espeak` build flag. supports French, Spanish, Italian, Portuguese, Hindi, and more.
-
 ## the command line
 
 ```bash
@@ -123,8 +102,6 @@ kokoro daemon start   # keep models loaded, 3x faster repeat synthesis
 ```
 
 `--stream` starts playback as soon as the first chunk is ready. `--ipa` accepts IPA phonemes directly.
-
-with eSpeak enabled: `kokoro say --language fr -v ff_siwis "bonjour le monde"`
 
 ## performance
 
@@ -151,7 +128,7 @@ graph LR
     F2 --> H[24kHz audio]
 ```
 
-text goes through an english G2P pipeline -- lexicon lookup, morphological stemming, number expansion. unknown words hit a fallback chain: CamelCase splitting, BART neural G2P, letter spelling as last resort. optional eSpeak-NG phonemizer adds multilingual support.
+text goes through an english G2P pipeline -- lexicon lookup, morphological stemming, number expansion. unknown words hit a fallback chain: CamelCase splitting, BART neural G2P, letter spelling as last resort.
 
 the engine uses a single dynamic CoreML model pair with 8-bit palettized weights. any length text gets chunked at sentence boundaries. `synthesize()` returns the full result. `speak()` streams chunks as `AsyncStream<SpeakEvent>`.
 
@@ -194,5 +171,3 @@ based on [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) by hexgrad.
 ## license
 
 Apache 2.0
-
-eSpeak-NG phonemizer (optional, behind `--traits espeak`) is GPL-3.0. default builds do not include it.
