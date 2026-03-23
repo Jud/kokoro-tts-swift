@@ -67,6 +67,7 @@ jobs:
           git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/Jud/homebrew-kokoro-coreml.git /tmp/homebrew-kokoro-coreml
           cd /tmp/homebrew-kokoro-coreml
 
+          sed -i '' "s|version \".*\"|version \"${VERSION}\"|" Formula/kokoro.rb
           sed -i '' "s|url \".*\"|url \"${URL}\"|" Formula/kokoro.rb
           sed -i '' "s|sha256 \".*\"|sha256 \"${SHA256}\"|" Formula/kokoro.rb
 
