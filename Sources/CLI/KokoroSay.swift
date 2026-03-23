@@ -109,8 +109,7 @@ struct Say: AsyncParsableCommand {
         /// eSpeak language code → Kokoro voice prefix → default voice
         private static let languageVoices:
             [(lang: String, name: String, prefix: String, defaultVoice: String)] = [
-                ("en", "English (American)", "a", "af_heart"),
-                ("en-gb", "English (British)", "b", "bf_emma"),
+                ("en", "English", "a", "af_heart"),
                 ("es", "Spanish", "e", "ef_dora"),
                 ("fr", "French", "f", "ff_siwis"),
                 ("hi", "Hindi", "h", "hf_alpha"),
@@ -237,13 +236,34 @@ struct Say: AsyncParsableCommand {
         let dir = modelDir.map { URL(fileURLWithPath: $0) } ?? KokoroEngine.defaultModelDirectory
         try CLIModelDownloader.ensureModels(at: dir)
         #if ESPEAK_NG
-            if let lang = language {
-                let phonemizer = try EspeakPhonemizer(language: lang)
-                return try KokoroEngine(modelDirectory: dir, phonemizer: phonemizer)
-            }
+            // Use eSpeak for all languages when compiled in.
+            // Infer language from voice prefix if --language not explicitly set.
+            let lang = language ?? Self.inferLanguage(fromVoice: voice)
+            let phonemizer = try EspeakPhonemizer(language: lang)
+            return try KokoroEngine(modelDirectory: dir, phonemizer: phonemizer)
+        #else
+            return try KokoroEngine(modelDirectory: dir)
         #endif
-        return try KokoroEngine(modelDirectory: dir)
     }
+
+    #if ESPEAK_NG
+        /// Infer eSpeak language code from Kokoro voice prefix.
+        private static func inferLanguage(fromVoice voice: String) -> String {
+            guard let prefix = voice.first else { return "en" }
+            switch prefix {
+            case "a": return "en"  // American English
+            case "b": return "en"  // British English (accent from voice model)
+            case "e": return "es"  // Spanish
+            case "f": return "fr"  // French
+            case "h": return "hi"  // Hindi
+            case "i": return "it"  // Italian
+            case "j": return "ja"  // Japanese
+            case "p": return "pt"  // Portuguese
+            case "z": return "cmn"  // Mandarin
+            default: return "en"
+            }
+        }
+    #endif
 
     private func executeStreaming() async throws {
         let engine = try loadEngine()
