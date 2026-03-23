@@ -8,7 +8,7 @@ struct Kokoro: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "kokoro",
         abstract: "Kokoro text-to-speech",
-        version: "0.9.0",
+        version: "0.10.0",
         subcommands: [Say.self, Update.self, Daemon.self],
         defaultSubcommand: Say.self
     )
@@ -17,17 +17,9 @@ struct Kokoro: AsyncParsableCommand {
 // MARK: - Say
 
 struct Say: AsyncParsableCommand {
-    #if ESPEAK_NG
-        static let configuration = CommandConfiguration(
-            abstract: "Synthesize text to speech"
-        )
-    #else
-        static let configuration = CommandConfiguration(
-            abstract: "Synthesize text to speech",
-            discussion:
-                "Note: build with --traits espeak to enable --language for multilingual synthesis via eSpeak-NG."
-        )
-    #endif
+    static let configuration = CommandConfiguration(
+        abstract: "Synthesize text to speech"
+    )
 
     @Option(name: [.short, .long], help: "Voice preset")
     var voice: String = "af_heart"
@@ -50,21 +42,11 @@ struct Say: AsyncParsableCommand {
     @Flag(name: .long, help: "Input is IPA phonemes (skip G2P)")
     var ipa = false
 
-    #if ESPEAK_NG
-        @Option(name: [.short, .long], help: "Language for eSpeak-NG phonemizer (e.g. es, fr, ja)")
-        var language: String?
-    #endif
-
     @Flag(name: .long, help: "Print debug information")
     var debug = false
 
     @Flag(name: .long, help: "List available voices")
     var listVoices = false
-
-    #if ESPEAK_NG
-        @Flag(name: .long, help: "List supported languages")
-        var listLanguages = false
-    #endif
 
     @Argument(help: "Text to synthesize (reads stdin if omitted)")
     var text: [String] = []
@@ -105,37 +87,6 @@ struct Say: AsyncParsableCommand {
         }
     }
 
-    #if ESPEAK_NG
-        /// eSpeak language code → display name → default voice
-        private static let languageVoices: [(lang: String, name: String, defaultVoice: String)] = [
-            ("en", "English", "af_heart"),
-            ("es", "Spanish", "ef_dora"),
-            ("fr", "French", "ff_siwis"),
-            ("hi", "Hindi", "hf_alpha"),
-            ("it", "Italian", "if_sara"),
-            ("ja", "Japanese", "jf_gongitsune"),
-            ("pt", "Portuguese", "pf_dora"),
-            ("cmn", "Mandarin", "zf_xiaoxiao"),
-        ]
-
-        private func defaultVoice(forLanguage lang: String) -> String? {
-            Self.languageVoices.first { $0.lang == lang }?.defaultVoice
-        }
-    #endif
-
-    /// Resolve the effective voice, applying language-based default if the user
-    /// specified --language but didn't override --voice.
-    private func resolveVoice() -> String {
-        #if ESPEAK_NG
-            if let lang = language, voice == "af_heart",
-                let defaultV = defaultVoice(forLanguage: lang)
-            {
-                return defaultV
-            }
-        #endif
-        return voice
-    }
-
     private func execute() throws {
         // --list-voices needs the engine, handle separately
         if listVoices {
@@ -143,20 +94,6 @@ struct Say: AsyncParsableCommand {
             for v in engine.availableVoices.sorted() { print(v) }
             return
         }
-
-        #if ESPEAK_NG
-            if listLanguages {
-                print("Supported languages (use with --language):\n")
-                for lv in Self.languageVoices {
-                    print(
-                        "  \(lv.lang.padding(toLength: 6, withPad: " ", startingAt: 0))  \(lv.name.padding(toLength: 22, withPad: " ", startingAt: 0))  default voice: \(lv.defaultVoice)"
-                    )
-                }
-                return
-            }
-        #endif
-
-        let voice = resolveVoice()
 
         // Resolve text once for both paths
         let inputText = try resolveText()
@@ -238,20 +175,11 @@ struct Say: AsyncParsableCommand {
     private func loadEngine() throws -> KokoroEngine {
         let dir = modelDir.map { URL(fileURLWithPath: $0) } ?? KokoroEngine.defaultModelDirectory
         try CLIModelDownloader.ensureModels(at: dir)
-        #if ESPEAK_NG
-            // Use eSpeak for phonemization when compiled in.
-            // Default to English unless --language explicitly set.
-            let lang = language ?? "en"
-            let phonemizer = try EspeakPhonemizer(language: lang)
-            return try KokoroEngine(modelDirectory: dir, phonemizer: phonemizer)
-        #else
-            return try KokoroEngine(modelDirectory: dir)
-        #endif
+        return try KokoroEngine(modelDirectory: dir)
     }
 
     private func executeStreaming() async throws {
         let engine = try loadEngine()
-        let voice = resolveVoice()
         let inputText = try resolveText()
 
         guard engine.availableVoices.contains(voice) else {
