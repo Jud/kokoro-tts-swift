@@ -83,8 +83,10 @@ final class VoiceStore: Sendable {
             throw KokoroError.modelLoadFailed("Voice file too small: \(url.lastPathComponent)")
         }
 
-        let numKeys = Int(data.withUnsafeBytes { $0.load(fromByteOffset: 0, as: UInt16.self).littleEndian })
-        let dim = Int(data.withUnsafeBytes { $0.load(fromByteOffset: 2, as: UInt16.self).littleEndian })
+        let numKeys = Int(
+            data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 0, as: UInt16.self).littleEndian })
+        let dim = Int(
+            data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 2, as: UInt16.self).littleEndian })
         let entrySize = 2 + dim * 4  // UInt16 key + dim × Float32
 
         guard data.count >= 4 + numKeys * entrySize else {
@@ -97,10 +99,11 @@ final class VoiceStore: Sendable {
         data.withUnsafeBytes { buf in
             for i in 0..<numKeys {
                 let offset = 4 + i * entrySize
-                let keyId = Int(buf.load(fromByteOffset: offset, as: UInt16.self).littleEndian)
+                let keyId = Int(buf.loadUnaligned(fromByteOffset: offset, as: UInt16.self).littleEndian)
                 var vec = [Float](repeating: 0, count: dim)
                 for j in 0..<dim {
-                    let bits = buf.load(fromByteOffset: offset + 2 + j * 4, as: UInt32.self).littleEndian
+                    let bits = buf.loadUnaligned(fromByteOffset: offset + 2 + j * 4, as: UInt32.self)
+                        .littleEndian
                     vec[j] = Float(bitPattern: bits)
                 }
                 if keyId == 0 {

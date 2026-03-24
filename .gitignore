@@ -34,3 +34,5 @@ verify_output/
 
 # OS
 .DS_Store
+Examples/KokoroApp/Models/
+Examples/KokoroApp/KokoroApp.xcodeproj/

@@ -1,0 +1,43 @@
+name: KokoroApp
+options:
+  bundleIdPrefix: com.kokoro
+  deploymentTarget:
+    iOS: "18.0"
+  xcodeVersion: "16.0"
+
+packages:
+  KokoroCoreML:
+    path: ../..
+
+targets:
+  KokoroApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: KokoroApp
+      - path: Models
+        type: folder
+        buildPhase: resources
+        optional: true
+    info:
+      path: KokoroApp/Info.plist
+      properties:
+        CFBundleName: Kokoro
+        CFBundleDisplayName: Kokoro
+        CFBundleIdentifier: com.kokoro.app
+        CFBundleVersion: "1"
+        CFBundleShortVersionString: "1.0.0"
+        CFBundleExecutable: KokoroApp
+        CFBundlePackageType: APPL
+        UILaunchScreen: {}
+        NSMicrophoneUsageDescription: Kokoro needs microphone access to hear what you say, then speak it back in a different voice.
+        NSSpeechRecognitionUsageDescription: Kokoro uses speech recognition to transcribe your voice so it can speak your words back.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kokoro.app
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        DEVELOPMENT_TEAM: ""
+        TARGETED_DEVICE_FAMILY: "1,2"
+    dependencies:
+      - package: KokoroCoreML

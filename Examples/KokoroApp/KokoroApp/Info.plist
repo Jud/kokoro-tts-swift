@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Kokoro</string>
+	<key>CFBundleExecutable</key>
+	<string>KokoroApp</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.kokoro.app</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Kokoro</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Kokoro needs microphone access to hear what you say, then speak it back in a different voice.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Kokoro uses speech recognition to transcribe your voice so it can speak your words back.</string>
+	<key>UILaunchScreen</key>
+	<dict/>
+</dict>
+</plist>
