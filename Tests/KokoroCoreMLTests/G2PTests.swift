@@ -31,6 +31,27 @@ struct G2PTests {
         #expect(phonemes.contains(","))
     }
 
+    @Test("Intra-word hyphens become word boundaries, not pauses")
+    func intraWordHyphens() {
+        let g2p = makeG2P()
+        let (phonemes, _) = g2p.phonemize(text: "Fixed the real-time push-to-talk parser")
+        #expect(!phonemes.contains("—"))
+    }
+
+    @Test("Spaced hyphens keep the pause phoneme")
+    func spacedHyphen() {
+        let g2p = makeG2P()
+        let (phonemes, _) = g2p.phonemize(text: "tests - all green")
+        #expect(phonemes.contains("—"))
+    }
+
+    @Test("Em dashes keep the pause phoneme even unspaced")
+    func emDash() {
+        let g2p = makeG2P()
+        let (phonemes, _) = g2p.phonemize(text: "Build green—shipping now")
+        #expect(phonemes.contains("—"))
+    }
+
     @Test("CamelCase OOV splits into known parts")
     func camelCaseSplit() {
         let g2p = makeG2P()

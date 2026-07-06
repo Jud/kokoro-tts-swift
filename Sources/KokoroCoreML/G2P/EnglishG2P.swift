@@ -405,7 +405,21 @@ final class EnglishG2P {
                 } else if token.tag == .dash
                     || (token.tag == .punctuation && token.text == "–")
                 {
-                    token.phonemes = "—"
+                    // An intra-word hyphen ("real-time") joins words — spoken as a
+                    // word boundary, not a pause. Spaced hyphens and en/em dashes
+                    // keep the pause phoneme.
+                    let prevWhitespace =
+                        j > 0
+                        ? subtokens[j - 1].whitespace
+                        : (i > 0 ? tokens[i - 1].whitespace : " ")
+                    let hasNext = j + 1 < subtokens.count || i + 1 < tokens.count
+                    if token.text == "-", token.whitespace.isEmpty,
+                        prevWhitespace.isEmpty, hasNext
+                    {
+                        token.phonemes = " "
+                    } else {
+                        token.phonemes = "—"
+                    }
                     token.meta.rating = 3
                 } else if let tag = token.tag, EnglishG2P.punctuationTags.contains(tag),
                     !token.text.lowercased().unicodeScalars.allSatisfy({
