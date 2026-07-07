@@ -52,6 +52,13 @@ struct G2PTests {
         #expect(phonemes.contains("—"))
     }
 
+    @Test("plugin resolves from the lexicon, not the OOV fallback")
+    func plugin() {
+        let g2p = makeG2P()
+        let (phonemes, _) = g2p.phonemize(text: "plugin plugins")
+        #expect(phonemes == "plˈʌɡˌɪn plˈʌɡˌɪnz")
+    }
+
     @Test("CamelCase OOV splits into known parts")
     func camelCaseSplit() {
         let g2p = makeG2P()
